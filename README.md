@@ -1,4 +1,4 @@
-# Signal-lite: E2EE Messaging Demo
+# Cipher-chat: E2EE Messaging Demo
 
 A portfolio project demonstrating end-to-end encrypted messaging architecture.
 
