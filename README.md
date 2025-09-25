@@ -1,15 +1,16 @@
-Cipher-chat: E2EE Messaging Demo
+# Cipher-chat: E2EE Messaging Demo
 
 A project demonstrating end to end encrypted messaging architecture.
 
-Quick Start
+## Quick Start
 
+```bash
 docker-compose up --build
-Open http://localhost:3000
+# Open http://localhost:3000
 
 Architecture:
 
-React + TypeScript - WebSocket - Node.js relay - SQLite (ciphertext only)
+React + TypeScript → WebSocket → Node.js relay → SQLite (ciphertext only)
 
 Features:
 
