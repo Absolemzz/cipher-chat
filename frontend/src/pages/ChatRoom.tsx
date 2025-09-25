@@ -75,31 +75,58 @@ export default function ChatRoom({ user, room, onLeave }: any) {
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <h3>Room: {room.code}</h3>
-      <div style={{ 
-        height: 300, 
-        overflow: 'auto', 
-        border: '1px solid #ddd', 
-        padding: 10, 
-        marginBottom: 10 
-      }}>
-        {messages.map(m => (
-          <div key={m.id}>
-            <b>{m.from}</b>: {m.text} <small>{m.status || ''}</small>
+    <div style={{backgroundColor: '#000000', minHeight: '100vh'}}>  
+      <div className="max-w-4xl mx-auto h-screen flex flex-col bg-gray-800">
+        {/* Header */}
+        <div className="bg-gray-800 p-4 border-b border-gray-700 flex justify-between items-center">
+          <h3 className="text-lg font-medium text-white">Room: {room.code}</h3>
+          <button 
+            onClick={onLeave}
+            className="text-sm text-gray-400 hover:text-white px-3 py-1 rounded"
+          >
+            Leave
+          </button>
+        </div>
+        
+        {/* Messages area */}
+        <div className="flex-1 overflow-y-auto p-4 bg-gray-800">
+          {messages.map(m => {
+            const isMe = m.from === user.id;
+            return (
+              <div key={m.id} className={`mb-3 flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-sm px-3 py-2 rounded-lg ${
+                  isMe 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-gray-700 text-gray-100'
+                }`}>
+                  <div className="text-sm">{m.text}</div>
+                  <div className={`text-xs mt-1 ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>
+                    {new Date(m.ts).toLocaleTimeString()} {m.status && `• ${m.status}`}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        
+        {/* Input area */}
+        <div className="bg-gray-800 p-4 border-t border-gray-700">
+          <div className="flex gap-2">
+            <input 
+              className="flex-1 px-3 py-2 bg-gray-800 rounded-lg text-white placeholder-gray-400 focus:outline-none"
+              placeholder="Type a message..."
+              value={text} 
+              onChange={e => setText(e.target.value)}
+              onKeyPress={e => e.key === 'Enter' && send()}
+            />
+            <button 
+              onClick={send}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Send
+            </button>
           </div>
-        ))}
-      </div>
-      <div>
-        <input 
-          style={{ width: '60%' }} 
-          value={text} 
-          onChange={e => setText(e.target.value)} 
-        />
-        {' '}
-        <button onClick={send}>Send</button>
-        {' '}
-        <button onClick={onLeave}>Leave</button>
+        </div>
       </div>
     </div>
   )

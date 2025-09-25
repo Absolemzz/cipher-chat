@@ -7,7 +7,7 @@ export default function App() {
   const [room, setRoom] = useState(null as any);
 
   if (!user) return <Login onLogin={setUser} />;
-  if (!room) return <div style={{padding:20}}><h2>Welcome, {user.username}</h2><ChatRoomSelector onJoin={setRoom} user={user} /></div>;
+  if (!room) return <div className="flex flex-col items-center justify-center h-screen" style={{backgroundColor: '#000000'}}><ChatRoomSelector onJoin={setRoom} user={user} /></div>;
 
   return <ChatRoom user={user} room={room} onLeave={() => setRoom(null)} />;
 }
@@ -25,8 +25,9 @@ function ChatRoomSelector({ onJoin, user }: any) {
     const data = await res.json();
     onJoin({ id: data.id, code: data.code });
   }
-  return (<div style={{padding:20}}>
-    <div style={{marginBottom:10}}><button onClick={create}>Create Room</button></div>
-    <div><input value={code} onChange={e=>setCode(e.target.value)} placeholder="invite code" /> <button onClick={join}>Join</button></div>
+  return (<div className="bg-gray-800 rounded-lg p-6 max-w-md">
+    <h2 className="text-white text-center mb-4">Welcome, {user.username}</h2>
+    <div style={{marginBottom:10}}><input value={code} onChange={e=>setCode(e.target.value)} placeholder="Invite code" style={{width:'100%', padding:'6px 8px', border:'2px solid #6b7280', borderRadius:4, outline:'none', boxSizing:'border-box'}} /></div>
+    <div style={{marginTop:10, display:'flex', gap:'8px'}}><button onClick={create} style={{flex:1, padding:'8px 12px', backgroundColor:'#374151', color:'white', border:'none', borderRadius:4, cursor:'pointer'}}>Host</button> <button onClick={join} style={{flex:1, padding:'8px 12px', backgroundColor:'#374151', color:'white', border:'none', borderRadius:4, cursor:'pointer'}}>Join</button></div>
   </div>)
 }
