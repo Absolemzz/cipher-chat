@@ -36,10 +36,24 @@ CREATE TABLE IF NOT EXISTS messages (
   ciphertext TEXT,
   timestamp INTEGER
 );
+CREATE TABLE IF NOT EXISTS user_rooms (
+  user_id TEXT,
+  room_id TEXT,
+  joined_at INTEGER,
+  PRIMARY KEY (user_id, room_id)
+);
 `);
 
 const limiter = rateLimit({ windowMs: 15*60*1000, max: 200 });
 app.use(limiter);
+
+function authFromToken(token) {
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch (e) {
+    return null;
+  }
+}
 
 app.post('/auth/register', (req, res) => {
   const { username, publicKeyHash } = req.body;
@@ -60,17 +74,59 @@ app.post('/auth/login', (req, res) => {
 });
 
 app.post('/rooms', (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const user = authFromToken(token);
+  if (!user) {
+    console.log('Room creation failed: unauthorized');
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  
   const id = uuidv4();
   const code = Math.random().toString(36).slice(2, 8);
   db.prepare('INSERT INTO rooms (id, code) VALUES (?, ?)').run(id, code);
+  
+  // Add host to the room
+  db.prepare('INSERT INTO user_rooms (user_id, room_id, joined_at) VALUES (?, ?, ?)').run(user.id, id, Date.now());
+  
+  console.log(`User ${user.id} created and joined room ${id} (${code})`);
+  
   res.json({ id, code });
 });
 
 app.get('/rooms/:code', (req, res) => {
   const { code } = req.params;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const user = authFromToken(token);
+  if (!user) return res.status(401).json({ error: 'unauthorized' });
+  
   const row = db.prepare('SELECT id, code FROM rooms WHERE code = ?').get(code);
   if (!row) return res.status(404).json({ error: 'room not found' });
+  
+  // Add user to room when they join
+  db.prepare('INSERT OR IGNORE INTO user_rooms (user_id, room_id, joined_at) VALUES (?, ?, ?)').run(user.id, row.id, Date.now());
+  
+  console.log(`User ${user.id} joined room ${row.id} (${code})`);
+  
   res.json({ id: row.id, code: row.code });
+});
+
+app.get('/users/:userId/rooms', (req, res) => {
+  const { userId } = req.params;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const user = authFromToken(token);
+  if (!user || user.id !== userId) return res.status(401).json({ error: 'unauthorized' });
+  
+  const rooms = db.prepare(`
+    SELECT r.id, r.code, ur.joined_at 
+    FROM user_rooms ur 
+    JOIN rooms r ON ur.room_id = r.id 
+    WHERE ur.user_id = ? 
+    ORDER BY ur.joined_at DESC
+  `).all(userId);
+  
+  console.log(`Fetching rooms for user ${userId}:`, rooms);
+  
+  res.json(rooms);
 });
 
 app.post('/keys/publish', (req, res) => {
@@ -80,18 +136,41 @@ app.post('/keys/publish', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/rooms/:roomId/messages', (req, res) => {
+  const { roomId } = req.params;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const user = authFromToken(token);
+  if (!user) return res.status(401).json({ error: 'unauthorized' });
+  
+  const messages = db.prepare('SELECT id, sender_id, ciphertext, timestamp FROM messages WHERE room_id = ? ORDER BY timestamp ASC').all(roomId);
+  res.json(messages);
+});
+
+app.delete('/users/:userId/rooms/:roomId', (req, res) => {
+  const { userId, roomId } = req.params;
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  const user = authFromToken(token);
+  if (!user || user.id !== userId) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+
+  db.prepare('DELETE FROM user_rooms WHERE user_id = ? AND room_id = ?').run(userId, roomId);
+
+  const rooms = db.prepare(`
+    SELECT r.id, r.code, ur.joined_at 
+    FROM user_rooms ur 
+    JOIN rooms r ON ur.room_id = r.id 
+    WHERE ur.user_id = ? 
+    ORDER BY ur.joined_at DESC
+  `).all(userId);
+
+  res.json(rooms);
+});
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const rooms = new Map(); // roomId -> Set of ws clients
-
-function authFromToken(token) {
-  try {
-    return jwt.verify(token, JWT_SECRET);
-  } catch (e) {
-    return null;
-  }
-}
 
 wss.on('connection', (ws, req) => {
   const params = new URLSearchParams(req.url.replace('/?', ''));
@@ -113,6 +192,10 @@ wss.on('connection', (ws, req) => {
         ws._roomId = roomId;
         if (!rooms.has(roomId)) rooms.set(roomId, new Set());
         rooms.get(roomId).add(ws);
+        
+        // Track user joining this room
+        db.prepare('INSERT OR IGNORE INTO user_rooms (user_id, room_id, joined_at) VALUES (?, ?, ?)').run(user.id, roomId, Date.now());
+        
         ws.send(JSON.stringify({ type: 'joined', roomId }));
         return;
       }

@@ -15,13 +15,18 @@ export default function App() {
 function ChatRoomSelector({ onJoin, user }: any) {
   const [code, setCode] = useState('');
   async function join() {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms/${code}`);
+    const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms/${code}`, {
+      headers: { 'Authorization': `Bearer ${user.token}` }
+    });
     const data = await res.json();
     if (data && data.id) onJoin({ id: data.id, code: data.code });
     else alert('room not found');
   }
   async function create() {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms`, { method: 'POST' });
+    const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms`, { 
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${user.token}` }
+    });
     const data = await res.json();
     onJoin({ id: data.id, code: data.code });
   }

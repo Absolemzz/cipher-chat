@@ -1,24 +1,24 @@
-# Threat Model (Signal-lite Demo)
+# Threat Model
 
 ## Assumptions
-- Server is *honest-but-curious*: it will route messages but may log metadata.
-- Clients run on reasonably secure devices; private keys stored locally (IndexedDB/localStorage in demo).
-- Network adversary can intercept, replay, or drop packets.
+- Server routes messages but may log metadata (honest-but-curious)
+- Private keys stored locally on reasonably secure devices
+- Network adversary can intercept, replay, or drop packets
 
-## STRIDE Analysis (high-level)
-- Spoofing: JWT demo tokens are weak — production must use strong auth and account recovery.
-- Tampering: Messages are integrity-protected by AES-GCM (demo) and by authenticated encryption in prod design.
-- Repudiation: Messages can be logged client-side; server stores ciphertext-only and cannot read contents.
-- Information Disclosure: Metadata (timestamps, room membership, message sizes) are visible to server.
-- Denial of Service: Rate limiting is present but minimal; production should include quota & abuse mitigation.
-- Elevation of Privilege: Clients never receive server admin keys; critical operations are server-side only.
+## Security Analysis
+- **Authentication**: JWT tokens are weak in demo - production needs strong auth
+- **Integrity**: Messages protected by AES-GCM (demo) and authenticated encryption (production)
+- **Confidentiality**: Server stores ciphertext only, cannot read message contents
+- **Metadata**: Timestamps, room membership, message sizes visible to server
+- **DoS Protection**: Basic rate limiting - production needs quota and abuse mitigation
+- **Privilege**: Clients have no admin access, critical operations server-side only
 
-## Limitations
-- Metadata protection not implemented.
-- Single-device model: key sync between devices not implemented.
-- Recovery uses encrypted backup (not implemented in demo scaffold).
+## Current Limitations
+- No metadata protection
+- Single-device model (no key sync)
+- No backup/recovery system
 
-## Recommendations for production
-- Use secure key storage (OS-backed keystore), protect backups using strong KDF.
-- Use X25519 + Double Ratchet (libolm / libsignal) or audited libraries.
-- Add metadata protection (padding, onion routing or mixnets) if needed.
+## Production Requirements
+- Secure key storage (OS keystore)
+- X25519 + Double Ratchet implementation
+- Metadata protection if required (padding, mixnets)
