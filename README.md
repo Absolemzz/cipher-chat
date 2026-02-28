@@ -1,29 +1,45 @@
-# Cipher-chat: E2EE Messaging Demo
+# Cipher-Chat
 
-A project demonstrating end to end encrypted messaging architecture.
+A demo application exploring end-to-end encrypted messaging architecture. Built to understand how client-side encryption, WebSockets, and secure message relay work together.
+
+> **Note:** This is a demo — currently simulates multiple users on the same local instance.
+
+## Architecture
+```
+React + TypeScript → WebSocket → Node.js relay → SQLite (ciphertext only)
+```
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React, TypeScript |
+| Backend | Node.js |
+| Database | SQLite |
+| Infra | Docker |
+
+## Security Design
+
+- Client-side AES-GCM encryption — server never sees plaintext
+- Server stores ciphertext only
+- Client-side key generation and encryption
+- Demo mode uses a shared secret — production design targets ECDH key exchange
 
 ## Quick Start
 
+Requires Docker:
 ```bash
 docker-compose up --build
 # Open http://localhost:3000
+```
 
-Architecture:
+## Repository Structure
 
-React + TypeScript → WebSocket → Node.js relay → SQLite (ciphertext only)
+- `/frontend` - React + TypeScript client
+- `/backend` - Node.js WebSocket relay
+- `/crypto-spec` - Encryption design and specs
+- `/infra` - Docker and infrastructure config
 
-Features:
+## License
 
-Client-side AES-GCM encryption (demo mode)
-
-Real time WebSocket messaging
-
-Dockerized deployment
-
-Security:
-
-Server stores only encrypted messages
-
-Clientside key generation and encryption
-
-Demo mode uses shared secret, production design uses ECDH key exchange
+MIT
