@@ -1,5 +1,6 @@
-// Offline message queue using localStorage
-export async function saveOfflineMessage(msg: any) { 
+import type { Message } from '../types'
+
+export async function saveOfflineMessage(msg: Message) { 
   const arr = JSON.parse(localStorage.getItem('outbox') || '[]');
   arr.push(msg);
   localStorage.setItem('outbox', JSON.stringify(arr));
