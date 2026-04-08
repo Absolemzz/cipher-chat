@@ -1,6 +1,6 @@
 const http = require('http');
 const app = require('./app');
-const attachWebSocket = require('./websocket/handler');
+const attachWebSocket = require('./websocket/server');
 
 const server = http.createServer(app);
 attachWebSocket(server);
