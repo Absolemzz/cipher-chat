@@ -26,6 +26,7 @@ export interface RoomHistoryMessage {
 }
 
 export type WsClientMessage =
+  | { type: 'auth_ok'; userId: string }
   | {
       type: 'ciphertext';
       id: string;
@@ -40,4 +41,5 @@ export type WsClientMessage =
       publicKey: string;
       roomId: string;
     }
-  | { type: 'delivered'; id: string };
+  | { type: 'delivered'; id: string }
+  | { type: 'error'; message: string };

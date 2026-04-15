@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { encryptMessage, decryptMessage, ensureKeys, getPublicKey, getKeyFingerprint, initializeSessionRootFromPeer } from '../crypto/crypto'
+import { ensureKeys, getPublicKey, getKeyFingerprint, initDoubleRatchet } from '../crypto/crypto'
+import { ratchetEncrypt, ratchetDecrypt, type RatchetSession } from '../crypto/double-ratchet'
 import { v4 as uuidv4 } from 'uuid'
 import type { User, Room, Message, RoomHistoryMessage, WsClientMessage } from '../types'
 
@@ -20,11 +21,11 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
   const [myFingerprint, setMyFingerprint] = useState<string | null>(null);
   const [recipientPublicKey, setRecipientPublicKey] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
+  const [keyWarning, setKeyWarning] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const keyCache = useRef<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const sessionRoot = useRef<CryptoKey | null>(null);
-  const sendIndex = useRef<number>(0);
+  const ratchetSessionRef = useRef<RatchetSession | null>(null);
   const historyLoadedRef = useRef(false);
   const sessionReadyRef = useRef(false);
   const pendingCiphertextRef = useRef<Extract<WsClientMessage, { type: 'ciphertext' }>[]>([]);
@@ -47,21 +48,22 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
     let cancelled = false;
     (async () => {
       try {
-        const root = await initializeSessionRootFromPeer(user.username, recipientPublicKey);
+        const session = await initDoubleRatchet(user.username, recipientPublicKey);
         if (cancelled) return;
-        sessionRoot.current = root;
+        ratchetSessionRef.current = session;
         setSessionReady(true);
       } catch (e) {
-        console.warn('[ChatRoom] initializeSessionRootFromPeer failed', e);
+        console.warn('[ChatRoom] initDoubleRatchet failed', e);
       }
     })();
     return () => { cancelled = true };
   }, [recipientPublicKey, user.username]);
 
   const decryptCiphertextMsg = useCallback(async (msg: Extract<WsClientMessage, { type: 'ciphertext' }>) => {
-    const root = sessionRoot.current;
-    if (!root) throw new Error('[ChatRoom] decrypt: session root not ready');
-    const { plaintext } = await decryptMessage(msg.ciphertext, root);
+    const session = ratchetSessionRef.current;
+    if (!session) throw new Error('[ChatRoom] decrypt: ratchet session not ready');
+    const { plaintext, session: updated } = await ratchetDecrypt(session, msg.ciphertext);
+    ratchetSessionRef.current = updated;
     setMessages(prev => [...prev, {
       id: msg.id,
       text: plaintext,
@@ -71,35 +73,36 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
   }, []);
 
   useEffect(() => {
-    if (!selectedRoom || !sessionReady || !sessionRoot.current) return;
+    if (!selectedRoom || !sessionReady || !ratchetSessionRef.current) return;
 
     let cancelled = false;
     historyLoadedRef.current = false;
 
     (async () => {
-      const root = sessionRoot.current!;
       try {
         const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms/${selectedRoom.id}/messages`, {
           headers: { 'Authorization': `Bearer ${user.token}` }
         });
         const history = await res.json() as RoomHistoryMessage[];
         const sorted = [...history].sort((a, b) => a.timestamp - b.timestamp);
-        let maxIdx = -1;
-        const decryptedHistory: (Message | null)[] = [];
+        const decryptedHistory: Message[] = [];
         for (const msg of sorted) {
           if (cancelled) return;
           try {
-            const parsed = JSON.parse(msg.ciphertext) as { idx?: number };
-            if (typeof parsed.idx === 'number') maxIdx = Math.max(maxIdx, parsed.idx);
-            const { plaintext } = await decryptMessage(msg.ciphertext, root);
+            const parsed = JSON.parse(msg.ciphertext) as { mode?: string };
+            if (parsed.mode !== 'double-ratchet') {
+              decryptedHistory.push({ id: msg.id, text: '[legacy encrypted message]', from: msg.sender_id, ts: msg.timestamp });
+              continue;
+            }
+            const { plaintext, session: updated } = await ratchetDecrypt(ratchetSessionRef.current!, msg.ciphertext);
+            ratchetSessionRef.current = updated;
             decryptedHistory.push({ id: msg.id, text: plaintext, from: msg.sender_id, ts: msg.timestamp });
           } catch {
-            decryptedHistory.push(null);
+            decryptedHistory.push({ id: msg.id, text: '[undecryptable message]', from: msg.sender_id, ts: msg.timestamp });
           }
         }
         if (cancelled) return;
-        sendIndex.current = maxIdx + 1;
-        setMessages(decryptedHistory.filter((m): m is Message => m !== null));
+        setMessages(decryptedHistory);
       } catch (e) {
         console.warn('failed to load message history', e);
         if (!cancelled) setMessages([]);
@@ -142,44 +145,50 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
     ensureKeys(user.username).catch(() => {});
     setRecipientPublicKey(null);
     setSessionReady(false);
+    setKeyWarning(null);
     setMessages([]);
-    sessionRoot.current = null;
-    sendIndex.current = 0;
+    ratchetSessionRef.current = null;
     historyLoadedRef.current = false;
     pendingCiphertextRef.current = [];
 
     const host = window.BACKEND_HOST || location.hostname;
-    const socket = new WebSocket(`ws://${host}:4000/?token=${user.token}`);
+    const socket = new WebSocket(`ws://${host}:4000`);
     wsRef.current = socket;
 
-    socket.addEventListener('open', async () => {
-      socket.send(JSON.stringify({ type: 'join', roomId: selectedRoom.id }));
-
-      await ensureKeys(user.username);
-      const myPub = getPublicKey(user.username);
-      if (myPub) {
-        socket.send(JSON.stringify({
-          type: 'public_key',
-          userId: user.id,
-          publicKey: myPub,
-          roomId: selectedRoom.id
-        }));
-      }
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ type: 'auth', token: user.token }));
     });
 
     socket.addEventListener('message', async (ev) => {
       const msg = JSON.parse(ev.data) as WsClientMessage;
+
+      if (msg.type === 'auth_ok') {
+        socket.send(JSON.stringify({ type: 'join', roomId: selectedRoom.id }));
+        await ensureKeys(user.username);
+        const myPub = getPublicKey(user.username);
+        if (myPub) {
+          socket.send(JSON.stringify({
+            type: 'public_key',
+            userId: user.id,
+            publicKey: myPub,
+            roomId: selectedRoom.id
+          }));
+        }
+        return;
+      }
 
       if (msg.type === 'public_key') {
         if (msg.userId === user.id) return;
         if (msg.roomId !== selectedRoom.id) return;
         keyCache.current.set(msg.userId, msg.publicKey);
         setRecipientPublicKey(msg.publicKey);
+
+        auditPeerKey(msg.userId, msg.publicKey);
         return;
       }
 
       if (msg.type === 'ciphertext') {
-        if (!sessionReadyRef.current || !sessionRoot.current || !historyLoadedRef.current) {
+        if (!sessionReadyRef.current || !ratchetSessionRef.current || !historyLoadedRef.current) {
           pendingCiphertextRef.current.push(msg);
           return;
         }
@@ -208,18 +217,14 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
       return;
     }
     if (!text.trim()) return;
-    if (!recipientPublicKey || !sessionRoot.current || !sessionReady) {
+    if (!recipientPublicKey || !ratchetSessionRef.current || !sessionReady) {
       console.error('[ChatRoom] E2E session not established');
       return;
     }
 
     const id = uuidv4();
-    const { ciphertext } = await encryptMessage(
-      text,
-      sessionRoot.current,
-      sendIndex.current
-    );
-    sendIndex.current += 1;
+    const { ciphertext, session: updated } = await ratchetEncrypt(ratchetSessionRef.current, text);
+    ratchetSessionRef.current = updated;
 
     const payload = {
       type: 'ciphertext',
@@ -261,6 +266,33 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
   const filteredRooms = rooms.filter(r =>
     r.code.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  async function auditPeerKey(peerId: string, currentKey: string) {
+    try {
+      const res = await fetch(`${location.protocol}//${location.hostname}:4000/keys/${peerId}/log`, {
+        headers: { 'Authorization': `Bearer ${user.token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json() as { entries: { public_key: string; published_at: number }[] };
+      if (data.entries.length <= 1) {
+        setKeyWarning(null);
+        return;
+      }
+
+      const lastKnownKey = localStorage.getItem(`peer_key_${peerId}`);
+      if (lastKnownKey && lastKnownKey !== currentKey) {
+        setKeyWarning(
+          `Peer's identity key has changed (${data.entries.length} keys on record). ` +
+          'Verify their fingerprint out-of-band to rule out a MITM attack.'
+        );
+      } else {
+        setKeyWarning(null);
+      }
+      localStorage.setItem(`peer_key_${peerId}`, currentKey);
+    } catch {
+      // network failure — don't block chat
+    }
+  }
 
   const canSendE2E = Boolean(recipientPublicKey && sessionReady);
 
@@ -338,6 +370,21 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
                   </div>
                 </div>
               </div>
+
+              {keyWarning && (
+                <div className="flex items-start gap-2.5 border-b border-amber-800/40 bg-amber-950/60 px-5 py-3">
+                  <span className="mt-0.5 flex-shrink-0 text-sm text-amber-400">&#9888;</span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-amber-300">Identity key changed</p>
+                    <p className="mt-0.5 text-xs text-amber-400/80">{keyWarning}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setKeyWarning(null)}
+                    className="ml-auto flex-shrink-0 text-xs text-amber-500 hover:text-amber-300"
+                  >dismiss</button>
+                </div>
+              )}
 
               <div className="min-h-0 flex-1 overflow-y-auto bg-zinc-950 p-4">
                 {messages.map(m => {

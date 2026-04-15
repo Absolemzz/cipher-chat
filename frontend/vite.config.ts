@@ -6,5 +6,9 @@ export default defineConfig({
   server: {
     host: true,
     port: Number(process.env.FRONTEND_PORT) || 3000
+  },
+  test: {
+    globals: true,
+    environment: 'node',
   }
 })

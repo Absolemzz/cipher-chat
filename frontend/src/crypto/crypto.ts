@@ -1,3 +1,5 @@
+import { createInitiatorSession, createResponderSession, type RatchetSession } from './double-ratchet';
+
 function str2ab(str: string) { return new TextEncoder().encode(str); }
 function ab2str(buf: ArrayBuffer): string { return new TextDecoder().decode(buf); }
 function buf2b64(buf: ArrayBuffer | Uint8Array) {
@@ -133,4 +135,58 @@ export async function decryptMessage(
     b642buf(parsed.ct)
   );
   return { plaintext: ab2str(pt) };
+}
+
+// ---------------------------------------------------------------------------
+// Double Ratchet session initialization
+// ---------------------------------------------------------------------------
+
+/**
+ * Derives the initial shared secret from identity keys and creates a
+ * Double Ratchet session. The `isInitiator` flag determines which role
+ * this party plays: the initiator sends the first message and performs
+ * the first DH ratchet step immediately; the responder waits for the
+ * first incoming message to trigger the ratchet.
+ *
+ * Deterministic initiator selection: the party whose identity public key
+ * is lexicographically smaller is the initiator. This ensures both sides
+ * agree without an extra round-trip.
+ */
+export async function initDoubleRatchet(
+  username: string,
+  peerPubKeyB64: string
+): Promise<RatchetSession> {
+  const stored = localStorage.getItem(`ecdh-keys-${username}`);
+  if (!stored) throw new Error('No local keypair found');
+  const { pub, priv } = JSON.parse(stored) as { pub: string; priv: string };
+
+  const privateKey = await crypto.subtle.importKey(
+    'pkcs8', b642buf(priv),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false, ['deriveBits']
+  );
+  const publicKey = await crypto.subtle.importKey(
+    'raw', b642buf(peerPubKeyB64),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false, []
+  );
+  const sharedBits = await crypto.subtle.deriveBits(
+    { name: 'ECDH', public: publicKey },
+    privateKey,
+    256
+  );
+
+  const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveBits']);
+  const sharedSecret = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: HKDF_ZERO_SALT, info: SESSION_ROOT_INFO },
+    hkdfKey,
+    256
+  );
+
+  const isInitiator = pub < peerPubKeyB64;
+
+  if (isInitiator) {
+    return createInitiatorSession(sharedSecret, peerPubKeyB64);
+  }
+  return createResponderSession(sharedSecret, { pub, priv });
 }
