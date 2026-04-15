@@ -9,12 +9,15 @@ interface LoginProps {
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('user-' + Math.floor(Math.random() * 1000));
 
-  async function publishKey(userId: string, token: string, username: string) {
+  async function publishKey(userId: string, token: string) {
     const publicKey = await ensureKeys(username);
     if (!publicKey) return;
     await fetch(`${location.protocol}//${location.hostname}:4000/keys/publish`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
       body: JSON.stringify({ userId, publicKey })
     });
   }
@@ -27,7 +30,7 @@ export default function Login({ onLogin }: LoginProps) {
     });
     const data = await res.json();
     if (data.token) {
-      await publishKey(data.id, data.token, username);
+      await publishKey(data.id, data.token);
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify({ id: data.id, username: data.username }));
       onLogin({ id: data.id, username: data.username, token: data.token });
@@ -44,7 +47,7 @@ export default function Login({ onLogin }: LoginProps) {
     });
     const data = await res.json();
     if (data.token) {
-      await publishKey(data.id, data.token, username);
+      await publishKey(data.id, data.token);
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify({ id: data.id, username: data.username }));
       onLogin({ id: data.id, username: data.username, token: data.token });
