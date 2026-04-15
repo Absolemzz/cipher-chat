@@ -25,7 +25,12 @@ async function joinRoomByCode(userId, code) {
   return { id: room.id, code: room.code };
 }
 
-async function getMessagesByRoomId(roomId) {
+async function getMessagesByRoomId(userId, roomId) {
+  if (!Room.isUserInRoom(userId, roomId)) {
+    const error = new Error('not a member of this room');
+    error.status = 403;
+    throw error;
+  }
   return Room.findMessagesByRoomId(roomId);
 }
 

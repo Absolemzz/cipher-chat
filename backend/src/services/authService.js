@@ -1,4 +1,3 @@
-// backend/src/services/authService.js
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const User = require('../models/User');
@@ -12,13 +11,15 @@ async function register({ username, publicKey, publicKeyHash }) {
     throw error;
   }
 
-  // Generate the new UUID
-  const id = uuidv4();
+  if (User.findByUsername(username)) {
+    const error = new Error('Username already taken');
+    error.status = 409;
+    throw error;
+  }
 
-  // Save to the database via the Model
+  const id = uuidv4();
   const newUser = User.create({ id, username, publicKey, publicKeyHash });
 
-  // Generate the token
   const token = jwt.sign(
     { id: newUser.id, username: newUser.username }, 
     JWT_SECRET, 

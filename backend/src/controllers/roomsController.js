@@ -1,57 +1,31 @@
-// backend/src/controllers/roomsController.js
 const roomService = require('../services/roomService');
-const { authFromToken } = require('../middleware/auth');
 
-async function createRoom(req, res) {
+async function createRoom(req, res, next) {
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const user = authFromToken(token);
-
-    if (!user) {
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-
-    const result = await roomService.createRoomForUser(user.id);
+    const result = await roomService.createRoomForUser(req.user.id);
     res.json(result);
   } catch (error) {
-    const status = error.status || 500;
-    res.status(status).json({ error: error.message });
+    next(error);
   }
 }
 
-async function joinRoom(req, res) {
+async function joinRoom(req, res, next) {
   try {
     const { code } = req.params;
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const user = authFromToken(token);
-
-    if (!user) {
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-
-    const result = await roomService.joinRoomByCode(user.id, code);
+    const result = await roomService.joinRoomByCode(req.user.id, code);
     res.json(result);
   } catch (error) {
-    const status = error.status || 500;
-    res.status(status).json({ error: error.message });
+    next(error);
   }
 }
 
-async function getRoomMessages(req, res) {
+async function getRoomMessages(req, res, next) {
   try {
     const { roomId } = req.params;
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    const user = authFromToken(token);
-
-    if (!user) {
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-
-    const messages = await roomService.getMessagesByRoomId(roomId);
+    const messages = await roomService.getMessagesByRoomId(req.user.id, roomId);
     res.json(messages);
   } catch (error) {
-    const status = error.status || 500;
-    res.status(status).json({ error: error.message });
+    next(error);
   }
 }
 

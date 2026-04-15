@@ -21,6 +21,11 @@ function addUserToRoomIgnore(userId, roomId, joinedAt) {
   stmt.run(userId, roomId, joinedAt);
 }
 
+function isUserInRoom(userId, roomId) {
+  const row = db.prepare('SELECT 1 FROM user_rooms WHERE user_id = ? AND room_id = ?').get(userId, roomId);
+  return !!row;
+}
+
 function findMessagesByRoomId(roomId) {
   const stmt = db.prepare('SELECT id, sender_id, ciphertext, timestamp FROM messages WHERE room_id = ? ORDER BY timestamp ASC');
   return stmt.all(roomId);
@@ -31,5 +36,6 @@ module.exports = {
   findByCode,
   addUserToRoom,
   addUserToRoomIgnore,
+  isUserInRoom,
   findMessagesByRoomId
 };
