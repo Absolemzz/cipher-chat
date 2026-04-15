@@ -13,6 +13,8 @@ End-to-end encrypted messaging with a Double Ratchet protocol implementation bui
 
 </div>
 
+---
+
 ## Quick Start
 
 ```bash
@@ -21,81 +23,94 @@ docker compose up --build
 
 Open `http://localhost:3000`. Register two users in separate browser tabs, create a room, share the room code, and start messaging.
 
+---
+
 ## Cryptographic Protocol
 
-The crypto layer implements the Double Ratchet Algorithm (the same protocol design used by Signal) entirely in the browser via the Web Crypto API. No third-party crypto libraries are used.
+The crypto layer implements the **Double Ratchet Algorithm** — the same protocol design used by Signal — entirely in the browser via the Web Crypto API. No third-party crypto libraries.
 
-**Key exchange and session initialization:**
-- Identity keys: ECDH over P-256, generated at registration
-- Initial shared secret: ECDH + HKDF-SHA-256 (salt = 32 zero bytes, info = `session_root_v1`)
-- Role determination: lexicographic comparison of base64 public keys (no extra round-trip)
-- Initiator performs the first DH ratchet step immediately; responder activates on first message
+ECDH P-256 for key agreement, HKDF-SHA-256 for root key derivation, HMAC-SHA-256 for chain key ratcheting, and AES-GCM-256 for authenticated encryption with header binding via AEAD `additionalData`. Fresh ephemeral key pairs are generated on every conversation turn; old private keys are discarded.
 
-**Double Ratchet:**
-- DH ratchet: fresh ephemeral P-256 key pair generated on every conversation turn, old private keys discarded
-- Symmetric ratchet: `KDF_CK` via HMAC-SHA-256 with single-byte constants (`0x01` for message key, `0x02` for next chain key)
-- Root key ratchet: `KDF_RK` via HKDF-SHA-256 (ikm = DH output, salt = root key, info = `ratchet_rk`)
-- Encryption: AES-GCM-256 with random 12-byte IV per message
-- AEAD: message header (`dh || pn || n`) serialized as `additionalData`, binding header to ciphertext
-- Skipped message keys: cached for out-of-order delivery, bounded at 100 entries (DoS protection)
+> [!NOTE]
+> Full protocol specification in [`crypto-spec/key-exchange.md`](crypto-spec/key-exchange.md).
+> Security analysis and threat model in [`crypto-spec/threat-model.md`](crypto-spec/threat-model.md).
 
-**Key verification:**
-- SHA-256 fingerprints (first 8 bytes, colon-separated hex) displayed in the UI
-- Append-only key transparency log on the server — clients detect and warn on key changes across sessions
-
-See [`crypto-spec/key-exchange.md`](crypto-spec/key-exchange.md) for the full protocol specification and [`crypto-spec/threat-model.md`](crypto-spec/threat-model.md) for the security analysis.
+---
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  subgraph client ["Client (Browser)"]
+    UI["React + TypeScript"]
+    Crypto["Double Ratchet\nECDH · HKDF · AES-GCM"]
+  end
+
+  subgraph server ["Server (Node.js)"]
+    API["Express API\nZod validation · JWT auth"]
+    WS["WebSocket Relay\nAuth · Rate limiting · Room state"]
+    DB["SQLite (WAL)\nMessages · Key log"]
+  end
+
+  UI -- plaintext --> Crypto
+  Crypto -- ciphertext --> WS
+  WS -- ciphertext --> Crypto
+  API --- DB
+  WS --- DB
 ```
-frontend/                React 18 + TypeScript (strict) + Tailwind
-  src/crypto/            Double Ratchet, ECDH, HKDF, AES-GCM — all Web Crypto API
-  src/pages/             Chat UI with key transparency warnings
 
-backend/src/             Node.js + Express + WebSocket (ws) + SQLite
-  routes/                HTTP endpoints with Zod schema validation
-  controllers/           Request orchestration
-  services/              Business logic and authorization
-  models/                SQLite data access (better-sqlite3, WAL mode)
-  middleware/            JWT auth + Zod validation
-  websocket/             Modular WS: auth, routing, room state, persistence
+> [!NOTE]
+> Detailed backend architecture, API surface, and WebSocket module design in [`backend/README.md`](backend/README.md).
 
-crypto-spec/             Protocol design docs and threat model
-infra/                   CI workflow (GitHub Actions)
-```
-
-**Backend design:** layered architecture (route → controller → service → model) with centralized error handling. The WebSocket layer is split into four modules: connection auth, message routing, room state management, and persistence — each with a single responsibility.
-
-**Security controls:**
-- WebSocket: first-message JWT auth (not in URL), per-connection rate limiting, 64KB payload cap, room membership enforcement on every action
-- HTTP: rate limiting (200 req / 15 min per IP), Zod validation on all route inputs
-- Key transparency: append-only `key_log` table, client-side key pinning in `localStorage`
-- Docker: multi-stage builds, non-root containers, named volumes, health checks
+---
 
 ## Testing
 
-| Layer | Framework | Tests |
-|-------|-----------|-------|
-| Backend API | Vitest + Supertest | 40 (auth, keys, rooms, key log, input validation) |
-| Backend WebSocket | Vitest + ws | 9 (auth, authorization, message relay) |
-| Frontend crypto (legacy) | Vitest + Web Crypto | 18 (ECDH, HKDF, AES-GCM, fingerprints) |
-| Frontend Double Ratchet | Vitest + Web Crypto | 19 (ratchet roundtrip, forward secrecy, out-of-order, AEAD, DoS bounds) |
+**86 automated tests** across four layers:
+
+| Layer | Framework | Count | Coverage |
+|-------|-----------|:-----:|----------|
+| Backend API | Vitest + Supertest | 40 | Auth, keys, rooms, key transparency log, Zod validation |
+| Backend WebSocket | Vitest + ws | 9 | Auth handshake, room authorization, message relay |
+| Frontend crypto | Vitest + Web Crypto | 18 | ECDH, HKDF, AES-GCM, key fingerprints |
+| Double Ratchet | Vitest + Web Crypto | 19 | Roundtrip, forward secrecy, out-of-order, AEAD binding, DoS bounds |
 
 ```bash
-cd backend && npm test      # API + WebSocket tests
+cd backend  && npm test     # API + WebSocket tests
 cd frontend && npm test     # Crypto + Double Ratchet tests
 ```
 
+---
+
+## Project Structure
+
+```
+frontend/
+  src/crypto/              Double Ratchet, ECDH, HKDF, AES-GCM (Web Crypto API)
+  src/pages/               Chat UI with key transparency warnings
+
+backend/src/
+  routes/                  HTTP endpoints with Zod schema validation
+  controllers/             Request/response orchestration
+  services/                Business logic and authorization
+  models/                  SQLite data access (better-sqlite3, WAL mode)
+  middleware/              JWT auth + Zod validation middleware
+  websocket/               Auth, routing, room state, persistence
+
+crypto-spec/               Protocol specification and threat model
+infra/                     GitHub Actions CI workflow
+```
+
+---
+
 ## Known Limitations
 
-These are deliberate scope decisions, documented in the [threat model](crypto-spec/threat-model.md):
+Deliberate scope decisions, documented in the [threat model](crypto-spec/threat-model.md):
 
-- **No X3DH** — both users must be online to establish a session (no prekey bundles for offline initiation)
-- **Ephemeral ratchet state** — ratchet state lives in memory; page reload requires a new session handshake
-- **Single device** — identity keys are in `localStorage`, no multi-device sync
-- **2-party only** — the ratchet operates between exactly two peers per room
-- **Trust on first use** — key verification is manual; the transparency log detects changes but doesn't enforce a PKI
-
-## License
-
-MIT
+| Limitation | Rationale |
+|-----------|-----------|
+| **No X3DH** | Both users must be online — no prekey bundles for offline session initiation |
+| **Ephemeral ratchet state** | State lives in memory; page reload requires new handshake (avoids stale state risks) |
+| **Single device** | Identity keys in `localStorage`, no multi-device sync |
+| **2-party only** | Ratchet operates between exactly two peers per room |
+| **Trust on first use** | Verification is manual; transparency log detects changes but doesn't enforce a PKI |
