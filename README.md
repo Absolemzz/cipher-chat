@@ -39,28 +39,14 @@ ECDH P-256 for key agreement, HKDF-SHA-256 for root key derivation, HMAC-SHA-256
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  subgraph client ["Client (Browser)"]
-    UI["React + TypeScript"]
-    Crypto["Double Ratchet\nECDH · HKDF · AES-GCM"]
-  end
+Browser: React for UI; Double Ratchet and Web Crypto run only here. Sensitive material does not go to the server.
 
-  subgraph server ["Server (Node.js)"]
-    API["Express API\nZod validation · JWT auth"]
-    WS["WebSocket Relay\nAuth · Rate limiting · Room state"]
-    DB["SQLite (WAL)\nMessages · Key log"]
-  end
+Server: Node. Express for HTTP (auth, rooms, key log). WebSocket for live relay (authenticated, rate-limited). SQLite (WAL) for persistence.
 
-  UI -- plaintext --> Crypto
-  Crypto -- ciphertext --> WS
-  WS -- ciphertext --> Crypto
-  API --- DB
-  WS --- DB
-```
+The server never sees message plaintext or private ratchet keys.
 
 > [!NOTE]
-> Detailed backend architecture, API surface, and WebSocket module design in [`backend/README.md`](backend/README.md).
+> HTTP routes, WebSocket modules, and persistence: [`backend/README.md`](backend/README.md).
 
 ---
 
