@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { ensureKeys } from '../crypto/crypto'
+import { ensureAuthSigningKey, ensureKeys, signAuthChallenge } from '../crypto/crypto'
 import type { User } from '../types'
 
 interface LoginProps {
@@ -8,9 +8,29 @@ interface LoginProps {
 
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('user-' + Math.floor(Math.random() * 1000));
+  const [password, setPassword] = useState('');
 
-  async function publishKey(userId: string, token: string) {
-    const publicKey = await ensureKeys(username);
+  async function readJson<T>(res: Response): Promise<T> {
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `request failed with ${res.status}`);
+    return data as T;
+  }
+
+  async function requestChallenge(
+    currentUsername: string,
+    purpose: 'register' | 'login',
+    authPublicKey?: string
+  ): Promise<{ challengeId: string; challenge: string }> {
+    const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/challenge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: currentUsername, purpose, authPublicKey })
+    });
+    return readJson<{ challengeId: string; challenge: string }>(res);
+  }
+
+  async function publishKey(currentUsername: string, userId: string, token: string) {
+    const publicKey = await ensureKeys(currentUsername);
     if (!publicKey) return;
     await fetch(`${location.protocol}//${location.hostname}:4000/keys/publish`, {
       method: 'POST',
@@ -23,36 +43,60 @@ export default function Login({ onLogin }: LoginProps) {
   }
 
   async function register() {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username })
-    });
-    const data = await res.json();
-    if (data.token) {
-      await publishKey(data.id, data.token);
+    const currentUsername = username.trim();
+    if (!currentUsername) return alert('username required');
+    if (password.length < 12) return alert('password must be at least 12 characters');
+
+    try {
+      const authPublicKey = await ensureAuthSigningKey(currentUsername);
+      const challenge = await requestChallenge(currentUsername, 'register', authPublicKey);
+      const signature = await signAuthChallenge(currentUsername, challenge.challenge);
+      const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: currentUsername,
+          password,
+          authPublicKey,
+          challengeId: challenge.challengeId,
+          signature
+        })
+      });
+      const data = await readJson<User>(res);
+      await publishKey(currentUsername, data.id, data.token);
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify({ id: data.id, username: data.username }));
       onLogin({ id: data.id, username: data.username, token: data.token });
-    } else {
-      alert('register failed');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'register failed');
     }
   }
 
   async function login() {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username })
-    });
-    const data = await res.json();
-    if (data.token) {
-      await publishKey(data.id, data.token);
+    const currentUsername = username.trim();
+    if (!currentUsername) return alert('username required');
+    if (!password) return alert('password required');
+
+    try {
+      const challenge = await requestChallenge(currentUsername, 'login');
+      const signature = await signAuthChallenge(currentUsername, challenge.challenge);
+      const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: currentUsername,
+          password,
+          challengeId: challenge.challengeId,
+          signature
+        })
+      });
+      const data = await readJson<User>(res);
+      await publishKey(currentUsername, data.id, data.token);
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify({ id: data.id, username: data.username }));
       onLogin({ id: data.id, username: data.username, token: data.token });
-    } else {
-      alert('login failed');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'login failed');
     }
   }
 
@@ -60,7 +104,7 @@ export default function Login({ onLogin }: LoginProps) {
     <div className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
       <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900/90 p-8 shadow-xl shadow-black/40">
         <h1 className="text-center text-xl font-semibold tracking-tight text-zinc-100">Cypher Chat</h1>
-        <p className="mt-2 text-center text-sm text-zinc-500">Sign in with a display name</p>
+        <p className="mt-2 text-center text-sm text-zinc-500">Sign in with your username and password</p>
 
         <label className="mt-8 block text-xs font-medium uppercase tracking-wider text-zinc-500">
           Username
@@ -69,6 +113,19 @@ export default function Login({ onLogin }: LoginProps) {
           value={username}
           onChange={e => setUsername(e.target.value)}
           className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-600 focus:border-zinc-500"
+        />
+
+        <label className="mt-4 block text-xs font-medium uppercase tracking-wider text-zinc-500">
+          Password
+        </label>
+        <input
+          type="password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && login()}
+          className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-600 focus:border-zinc-500"
+          placeholder="At least 12 characters"
+          autoComplete="current-password"
         />
 
         <div className="mt-6 flex gap-3">

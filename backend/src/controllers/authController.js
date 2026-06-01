@@ -1,5 +1,14 @@
 const authService = require('../services/authService');
 
+async function challenge(req, res, next) {
+  try {
+    const result = await authService.createChallenge(req.body || {});
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function register(req, res, next) {
   try {
     const result = await authService.register(req.body || {});
@@ -11,8 +20,7 @@ async function register(req, res, next) {
 
 async function login(req, res, next) {
   try {
-    const { username } = req.body || {};
-    const result = await authService.login(username);
+    const result = await authService.login(req.body || {});
     res.json(result);
   } catch (error) {
     next(error);
@@ -20,6 +28,7 @@ async function login(req, res, next) {
 }
 
 module.exports = {
+  challenge,
   register,
   login
 };

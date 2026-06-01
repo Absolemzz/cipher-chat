@@ -1,14 +1,14 @@
 const db = require('../db');
 
 function findByUsername(username) {
-  return db.prepare('SELECT id, username FROM users WHERE username = ?').get(username);
+  return db.prepare('SELECT id, username, password_hash, auth_public_key FROM users WHERE username = ?').get(username);
 }
 
-function create({ id, username, publicKey, publicKeyHash }) {
+function create({ id, username, passwordHash, publicKey, authPublicKey }) {
   db.prepare(
-    'INSERT INTO users (id, username, public_key, public_key_hash) VALUES (?, ?, ?, ?)'
-  ).run(id, username, publicKey || null, publicKeyHash || null);
-  return { id, username, publicKey, publicKeyHash };
+    'INSERT INTO users (id, username, password_hash, public_key, auth_public_key) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, username, passwordHash, publicKey || null, authPublicKey || null);
+  return { id, username, passwordHash, publicKey, authPublicKey };
 }
 
 function findPublicKey(userId) {

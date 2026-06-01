@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import request from 'supertest';
+import { generateKeyPairSync, sign as cryptoSign } from 'crypto';
 
 process.env.DB_PATH = ':memory:';
+process.env.JWT_SECRET = 'test_jwt_secret';
 
 const { default: app } = await import('../src/app.js');
 
@@ -9,6 +11,58 @@ let userA = {};
 let userB = {};
 let roomId = '';
 let roomCode = '';
+const DEFAULT_PASSWORD = 'correct horse battery staple';
+
+function createAuthKeyPair() {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  return {
+    privateKey,
+    authPublicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+  };
+}
+
+function signChallenge(privateKey, challenge) {
+  return cryptoSign(
+    'sha256',
+    Buffer.from(challenge, 'utf8'),
+    { key: privateKey, dsaEncoding: 'ieee-p1363' }
+  ).toString('base64');
+}
+
+async function signedRegister(username, options = {}) {
+  const auth = createAuthKeyPair();
+  const password = options.password || DEFAULT_PASSWORD;
+  const challenge = await request(app)
+    .post('/auth/challenge')
+    .send({ username, purpose: 'register', authPublicKey: auth.authPublicKey });
+  const signature = signChallenge(auth.privateKey, challenge.body.challenge);
+  const res = await request(app)
+    .post('/auth/register')
+    .send({
+      username,
+      password,
+      authPublicKey: auth.authPublicKey,
+      challengeId: challenge.body.challengeId,
+      signature,
+      ...options,
+    });
+  return { res, auth, password };
+}
+
+async function signedLogin(user, password = user.password) {
+  const challenge = await request(app)
+    .post('/auth/challenge')
+    .send({ username: user.username, purpose: 'login' });
+  const signature = signChallenge(user.auth.privateKey, challenge.body.challenge);
+  return request(app)
+    .post('/auth/login')
+    .send({
+      username: user.username,
+      password,
+      challengeId: challenge.body.challengeId,
+      signature,
+    });
+}
 
 describe('health', () => {
   it('returns ok', async () => {
@@ -21,21 +75,19 @@ describe('health', () => {
 
 describe('auth', () => {
   it('registers a new user', async () => {
-    const res = await request(app)
-      .post('/auth/register')
-      .send({ username: 'alice' });
+    const { res, auth, password } = await signedRegister('alice');
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('id');
     expect(res.body).toHaveProperty('token');
     expect(res.body.username).toBe('alice');
-    userA = res.body;
+    userA = { ...res.body, auth, password };
   });
 
   it('rejects duplicate username', async () => {
     const res = await request(app)
-      .post('/auth/register')
-      .send({ username: 'alice' });
+      .post('/auth/challenge')
+      .send({ username: 'alice', purpose: 'register', authPublicKey: createAuthKeyPair().authPublicKey });
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already taken/i);
@@ -50,30 +102,58 @@ describe('auth', () => {
   });
 
   it('logs in an existing user', async () => {
-    const res = await request(app)
-      .post('/auth/login')
-      .send({ username: 'alice' });
+    const res = await signedLogin(userA);
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(userA.id);
     expect(res.body).toHaveProperty('token');
   });
 
-  it('rejects login for unknown user', async () => {
+  it('rejects login with the wrong password', async () => {
+    const res = await signedLogin(userA, 'wrong horse battery staple');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/invalid username or password/i);
+  });
+
+  it('rejects bare username login', async () => {
     const res = await request(app)
       .post('/auth/login')
-      .send({ username: 'nonexistent' });
+      .send({ username: 'alice' });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects login signed by the wrong key', async () => {
+    const challenge = await request(app)
+      .post('/auth/challenge')
+      .send({ username: userA.username, purpose: 'login' });
+    const attacker = createAuthKeyPair();
+    const res = await request(app)
+      .post('/auth/login')
+      .send({
+        username: userA.username,
+        password: userA.password,
+        challengeId: challenge.body.challengeId,
+        signature: signChallenge(attacker.privateKey, challenge.body.challenge),
+      });
+
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects login for unknown user', async () => {
+    const res = await request(app)
+      .post('/auth/challenge')
+      .send({ username: 'nonexistent', purpose: 'login' });
 
     expect(res.status).toBe(404);
   });
 
   it('registers a second user', async () => {
-    const res = await request(app)
-      .post('/auth/register')
-      .send({ username: 'bob' });
+    const { res, auth, password } = await signedRegister('bob');
 
     expect(res.status).toBe(200);
-    userB = res.body;
+    userB = { ...res.body, auth, password };
   });
 });
 
@@ -162,9 +242,7 @@ describe('room authorization', () => {
   });
 
   it('non-member cannot read messages', async () => {
-    const reg = await request(app)
-      .post('/auth/register')
-      .send({ username: 'eve' });
+    const { res: reg } = await signedRegister('eve');
 
     const res = await request(app)
       .get(`/rooms/${roomId}/messages`)
@@ -203,9 +281,7 @@ describe('key transparency log', () => {
   });
 
   it('returns empty log for user with no published key', async () => {
-    const reg = await request(app)
-      .post('/auth/register')
-      .send({ username: 'logtest' });
+    const { res: reg } = await signedRegister('logtest');
 
     const res = await request(app)
       .get(`/keys/${reg.body.id}/log`)

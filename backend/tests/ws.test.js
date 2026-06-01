@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import WebSocket from 'ws';
+import request from 'supertest';
+import { generateKeyPairSync, sign as cryptoSign } from 'crypto';
 
 process.env.DB_PATH = ':memory:';
+process.env.JWT_SECRET = 'test_jwt_secret';
 
 const { default: app } = await import('../src/app.js');
 const attachWebSocket = (await import('../src/websocket/server.js')).default;
@@ -14,6 +17,41 @@ let userA = {};
 let userB = {};
 let eve = {};
 let roomId = '';
+const DEFAULT_PASSWORD = 'correct horse battery staple';
+
+function createAuthKeyPair() {
+  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  return {
+    privateKey,
+    authPublicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+  };
+}
+
+function signChallenge(privateKey, challenge) {
+  return cryptoSign(
+    'sha256',
+    Buffer.from(challenge, 'utf8'),
+    { key: privateKey, dsaEncoding: 'ieee-p1363' }
+  ).toString('base64');
+}
+
+async function signedRegister(username) {
+  const auth = createAuthKeyPair();
+  const challenge = await request(app)
+    .post('/auth/challenge')
+    .send({ username, purpose: 'register', authPublicKey: auth.authPublicKey });
+  const signature = signChallenge(auth.privateKey, challenge.body.challenge);
+  const res = await request(app)
+    .post('/auth/register')
+    .send({
+      username,
+      password: DEFAULT_PASSWORD,
+      authPublicKey: auth.authPublicKey,
+      challengeId: challenge.body.challengeId,
+      signature,
+    });
+  return { ...res.body, auth, password: DEFAULT_PASSWORD };
+}
 
 function wsUrl() {
   return `ws://127.0.0.1:${port}`;
@@ -55,17 +93,13 @@ beforeAll(async () => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   port = server.address().port;
 
-  const supertest = (await import('supertest')).default;
-  const req = supertest(app);
+  const req = request(app);
 
-  const resA = await req.post('/auth/register').send({ username: 'ws_alice' });
-  userA = resA.body;
+  userA = await signedRegister('ws_alice');
 
-  const resB = await req.post('/auth/register').send({ username: 'ws_bob' });
-  userB = resB.body;
+  userB = await signedRegister('ws_bob');
 
-  const resEve = await req.post('/auth/register').send({ username: 'ws_eve' });
-  eve = resEve.body;
+  eve = await signedRegister('ws_eve');
 
   const roomRes = await req.post('/rooms').set('Authorization', `Bearer ${userA.token}`);
   roomId = roomRes.body.id;

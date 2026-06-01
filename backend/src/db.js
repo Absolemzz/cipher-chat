@@ -9,8 +9,9 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
+  password_hash TEXT,
   public_key TEXT,
-  public_key_hash TEXT
+  auth_public_key TEXT
 );
 CREATE TABLE IF NOT EXISTS rooms (
   id TEXT PRIMARY KEY,
@@ -35,9 +36,21 @@ CREATE TABLE IF NOT EXISTS key_log (
   public_key TEXT NOT NULL,
   published_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS auth_challenges (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  auth_public_key TEXT,
+  nonce TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
 `);
 
 try { db.exec('ALTER TABLE users ADD COLUMN public_key TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE users ADD COLUMN auth_public_key TEXT'); } catch (_) {}
+try { db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT'); } catch (_) {}
 
 try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)');
@@ -45,6 +58,7 @@ try {
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, timestamp)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_user_rooms_user ON user_rooms(user_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_key_log_user ON key_log(user_id, published_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges(expires_at)');
 } catch (_) {}
 
 module.exports = db;
