@@ -60,28 +60,29 @@ Once a peer's public key is received, both sides derive a shared secret:
 1. **ECDH**: `deriveBits(myPriv, peerPub)` → 256-bit shared secret
 2. **HKDF**: shared secret as IKM, `salt = 32 zero bytes`, `info = "session_root_v1"` → 256-bit initial root key
 
-### Role determination
+### Initial bidirectional chains
 
-Both parties must agree on who is the **initiator** (sends first) and who is the
-**responder** (receives first). This is determined deterministically: the party whose
-base64-encoded identity public key is lexicographically smaller is the initiator.
-No extra round-trip is needed.
+Both parties derive two independent initial chain keys from the identity ECDH output:
 
-### Initiator setup
+1. Sort the two identity public keys lexicographically as `(low, high)`
+2. `HKDF-SHA-256(initialRootKey, info="initial_chains_v1:<low>:<high>")` → 512 bits
+3. First 256 bits = `low → high` chain, last 256 bits = `high → low` chain
 
-The initiator immediately generates a fresh ephemeral ECDH key pair and performs a
-DH ratchet step against the responder's identity public key:
+Each client assigns one chain as `sendChainKey` and the other as `recvChainKey` based
+on its identity public key. This lets either participant send the first message without
+an extra round-trip, while keeping the two directions cryptographically separated.
+
+### Transition into the DH ratchet
+
+Initial messages use the sender's identity public key in the message header. After a
+client receives an initial-chain message, its next outbound message performs a DH ratchet
+step with a fresh ephemeral ECDH key pair against the peer's identity public key:
 
 1. `dhOutput = ECDH(ephemeralPriv, peerIdentityPub)`
 2. `(rootKey, sendChainKey) = KDF_RK(initialRootKey, dhOutput)`
 
-The initiator can now encrypt messages using the sending chain.
-
-### Responder setup
-
-The responder stores the initial root key and uses their identity key pair as their
-initial DH ratchet key. They cannot encrypt until they receive the first message
-(which contains the initiator's ephemeral public key and triggers the DH ratchet).
+From that point on, turn-taking uses the normal Double Ratchet DH steps with fresh
+ephemeral keys.
 
 ## The Double Ratchet
 
@@ -182,8 +183,8 @@ Each message is encrypted with AES-GCM-256:
 3. User B receives A's public key, initializes a Double Ratchet session
 4. User B sends their identity public key via WebSocket
 5. User A receives B's public key, initializes their side of the session
-6. The initiator (determined by key ordering) can send immediately; the responder's
-   sending chain activates upon receiving the first message
+6. Both clients derive independent initial send/receive chains, so either user can
+   send the first message
 7. Messages received before the session is ready are queued and decrypted once established
 
 ## Key Fingerprints

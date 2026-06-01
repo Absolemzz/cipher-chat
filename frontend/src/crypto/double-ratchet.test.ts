@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   generateDHKeyPair,
-  createInitiatorSession,
-  createResponderSession,
+  createBidirectionalSession,
   ratchetEncrypt,
   ratchetDecrypt,
   type RatchetSession,
@@ -44,18 +43,8 @@ async function setupPair(): Promise<{ alice: RatchetSession; bob: RatchetSession
 
   const secret = await sharedSecretFromPair(aliceId, bobId);
 
-  const isAliceInitiator = aliceId.pub < bobId.pub;
-
-  let alice: RatchetSession;
-  let bob: RatchetSession;
-
-  if (isAliceInitiator) {
-    alice = await createInitiatorSession(secret, bobId.pub);
-    bob = await createResponderSession(secret, bobId);
-  } else {
-    bob = await createInitiatorSession(secret, aliceId.pub);
-    alice = await createResponderSession(secret, aliceId);
-  }
+  const alice = await createBidirectionalSession(secret, aliceId, bobId.pub);
+  const bob = await createBidirectionalSession(secret, bobId, aliceId.pub);
 
   return { alice, bob, aliceId, bobId };
 }
@@ -69,8 +58,8 @@ describe('Double Ratchet — basic roundtrip', () => {
   });
 
   it('initiator encrypts, responder decrypts', async () => {
-    const initiator = alice.chainKeySend ? alice : bob;
-    let responder = alice.chainKeySend ? bob : alice;
+    const initiator = alice;
+    let responder = bob;
 
     const { ciphertext, session: s1 } = await ratchetEncrypt(initiator, 'hello from initiator');
     const { plaintext, session: s2 } = await ratchetDecrypt(responder, ciphertext);
@@ -78,6 +67,17 @@ describe('Double Ratchet — basic roundtrip', () => {
     expect(plaintext).toBe('hello from initiator');
     expect(s1.sendN).toBe(1);
     expect(s2.recvN).toBe(1);
+  });
+
+  it('either participant can send the first message', async () => {
+    const fromAlice = await ratchetEncrypt(alice, 'alice starts');
+    const aliceToBob = await ratchetDecrypt(bob, fromAlice.ciphertext);
+    expect(aliceToBob.plaintext).toBe('alice starts');
+
+    const fresh = await setupPair();
+    const fromBob = await ratchetEncrypt(fresh.bob, 'bob starts');
+    const bobToAlice = await ratchetDecrypt(fresh.alice, fromBob.ciphertext);
+    expect(bobToAlice.plaintext).toBe('bob starts');
   });
 
   it('handles unicode and emoji', async () => {

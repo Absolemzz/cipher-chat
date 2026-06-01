@@ -9,10 +9,9 @@ declare global { interface Window { BACKEND_HOST?: string } }
 interface ChatRoomProps {
   user: User;
   room: Room;
-  onLeave: () => void;
 }
 
-export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
+export default function ChatRoom({ user, room }: ChatRoomProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState('');
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -23,7 +22,6 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
   const [sessionReady, setSessionReady] = useState(false);
   const [keyWarning, setKeyWarning] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const keyCache = useRef<Map<string, string>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const ratchetSessionRef = useRef<RatchetSession | null>(null);
   const historyLoadedRef = useRef(false);
@@ -180,7 +178,6 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
       if (msg.type === 'public_key') {
         if (msg.userId === user.id) return;
         if (msg.roomId !== selectedRoom.id) return;
-        keyCache.current.set(msg.userId, msg.publicKey);
         setRecipientPublicKey(msg.publicKey);
 
         auditPeerKey(msg.userId, msg.publicKey);
@@ -223,8 +220,15 @@ export default function ChatRoom({ user, room, onLeave }: ChatRoomProps) {
     }
 
     const id = uuidv4();
-    const { ciphertext, session: updated } = await ratchetEncrypt(ratchetSessionRef.current, text);
-    ratchetSessionRef.current = updated;
+    let ciphertext: string;
+    try {
+      const encrypted = await ratchetEncrypt(ratchetSessionRef.current, text);
+      ciphertext = encrypted.ciphertext;
+      ratchetSessionRef.current = encrypted.session;
+    } catch (e) {
+      console.error('[ChatRoom] encrypt failed', e);
+      return;
+    }
 
     const payload = {
       type: 'ciphertext',

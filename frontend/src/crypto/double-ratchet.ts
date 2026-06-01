@@ -133,6 +133,8 @@ export interface RatchetSession {
   recvN: number;
   prevSendN: number;
   skippedKeys: Map<string, ArrayBuffer>;
+  initialChain?: boolean;
+  pendingSendRatchet?: boolean;
 }
 
 function skippedKey(dhPub: string, n: number): string {
@@ -196,6 +198,51 @@ export async function createResponderSession(
   };
 }
 
+async function deriveInitialChains(
+  sharedSecret: ArrayBuffer,
+  myIdentityPub: string,
+  peerIdentityPub: string
+): Promise<{ send: ArrayBuffer; recv: ArrayBuffer }> {
+  const [low, high] = [myIdentityPub, peerIdentityPub].sort();
+  const hkdfKey = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveBits']);
+  const derived = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: HKDF_ZERO_SALT,
+      info: new TextEncoder().encode(`initial_chains_v1:${low}:${high}`),
+    },
+    hkdfKey,
+    512
+  );
+  const lowToHigh = derived.slice(0, 32);
+  const highToLow = derived.slice(32, 64);
+  return myIdentityPub === low
+    ? { send: lowToHigh, recv: highToLow }
+    : { send: highToLow, recv: lowToHigh };
+}
+
+export async function createBidirectionalSession(
+  sharedSecret: ArrayBuffer,
+  myIdentityKeyPair: { pub: string; priv: string },
+  peerIdentityPub: string
+): Promise<RatchetSession> {
+  const chains = await deriveInitialChains(sharedSecret, myIdentityKeyPair.pub, peerIdentityPub);
+  return {
+    dhSend: myIdentityKeyPair,
+    dhRecv: peerIdentityPub,
+    rootKey: sharedSecret,
+    chainKeySend: chains.send,
+    chainKeyRecv: chains.recv,
+    sendN: 0,
+    recvN: 0,
+    prevSendN: 0,
+    skippedKeys: new Map(),
+    initialChain: true,
+    pendingSendRatchet: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Encrypt
 // ---------------------------------------------------------------------------
@@ -225,16 +272,18 @@ export async function ratchetEncrypt(
   session: RatchetSession,
   plaintext: string
 ): Promise<{ ciphertext: string; session: RatchetSession }> {
-  if (!session.chainKeySend) {
+  let s = session.pendingSendRatchet ? await sendRatchetStep(session) : session;
+
+  if (!s.chainKeySend) {
     throw new Error('sending chain not initialized — waiting for first incoming message');
   }
 
-  const { chainKey: newCK, messageKey } = await kdfCK(session.chainKeySend);
+  const { chainKey: newCK, messageKey } = await kdfCK(s.chainKeySend);
 
   const header: RatchetHeader = {
-    dh: session.dhSend.pub,
-    pn: session.prevSendN,
-    n: session.sendN,
+    dh: s.dhSend.pub,
+    pn: s.prevSendN,
+    n: s.sendN,
   };
 
   const ad = encodeHeaderAD(header);
@@ -252,9 +301,9 @@ export async function ratchetEncrypt(
   return {
     ciphertext,
     session: {
-      ...session,
+      ...s,
       chainKeySend: newCK,
-      sendN: session.sendN + 1,
+      sendN: s.sendN + 1,
     },
   };
 }
@@ -328,6 +377,25 @@ async function dhRatchetStep(
     prevSendN: session.sendN,
     sendN: 0,
     recvN: 0,
+    initialChain: false,
+    pendingSendRatchet: false,
+  };
+}
+
+async function sendRatchetStep(session: RatchetSession): Promise<RatchetSession> {
+  if (!session.dhRecv) throw new Error('cannot send-ratchet before receiving peer DH key');
+  const newDH = await generateDHKeyPair();
+  const dhOutput = await dh(newDH.priv, session.dhRecv);
+  const { rootKey, chainKey } = await kdfRK(session.rootKey, dhOutput);
+  return {
+    ...session,
+    dhSend: newDH,
+    rootKey,
+    chainKeySend: chainKey,
+    prevSendN: session.sendN,
+    sendN: 0,
+    initialChain: false,
+    pendingSendRatchet: false,
   };
 }
 
@@ -351,9 +419,11 @@ export async function ratchetDecrypt(
   }
 
   let s = session;
+  const usedExistingReceivingChain = msg.dh === s.dhRecv;
+  const usedInitialReceivingChain = Boolean(s.initialChain && usedExistingReceivingChain);
 
   // If the DH key has changed, perform a DH ratchet step
-  if (msg.dh !== s.dhRecv) {
+  if (!usedExistingReceivingChain) {
     // Skip remaining messages in the current receiving chain
     s = await skipMessageKeys(s, msg.pn);
     // Perform the DH ratchet
@@ -375,6 +445,7 @@ export async function ratchetDecrypt(
       ...s,
       chainKeyRecv: newCK,
       recvN: s.recvN + 1,
+      pendingSendRatchet: usedInitialReceivingChain ? true : s.pendingSendRatchet,
     },
   };
 }
