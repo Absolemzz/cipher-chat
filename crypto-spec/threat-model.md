@@ -3,18 +3,20 @@
 ## Trust Assumptions
 
 - The server is honest-but-curious: it routes messages correctly but may log metadata
-- Private keys are stored in localStorage on a reasonably secure device
+- Cryptographic material (ECDH identity keys, auth signing keys, JWT, peer key pins) lives in `localStorage` on a reasonably secure device
 - The network is untrusted: a passive or active adversary may intercept, replay, or drop packets
 - Users are responsible for verifying key fingerprints out-of-band
+- Operators configure a strong `JWT_SECRET` (required at startup) and optionally `PASSWORD_PEPPER` for password hashing
 
 ## What the Server Can See
 
 Even though the server never sees plaintext, it has visibility into:
 
 - Message timestamps and approximate sizes (ciphertext length)
-- Room membership and join/leave times
+- Room membership and join times
 - Which users communicate with which rooms
 - Public keys (by design — required for key distribution)
+- Usernames, password hashes (Argon2id), and auth public keys (SPKI DER, base64) at registration
 
 This is metadata leakage. An honest-but-curious server cannot read messages but can
 infer communication patterns.
@@ -40,11 +42,21 @@ If an attacker temporarily compromises ratchet state, the next DH ratchet step (
 by the peer's next reply) re-establishes security with fresh key material the attacker
 does not possess.
 
-**Authentication**
-Users authenticate with JWT tokens signed with a server-side secret. Tokens expire after
-7 days. This is adequate for a demo but has weaknesses: there is no password or second
-factor, and username registration is open with no identity verification. A stolen token
-grants full account access until expiry.
+**Account authentication**
+HTTP login and registration use a two-step flow:
+
+1. **`POST /auth/challenge`** — server issues a short-lived, single-use challenge (5 minute TTL, stored in `auth_challenges`).
+2. **`POST /auth/register` or `/auth/login`** — client proves possession of a browser-held **auth signing key** (ECDSA P-256) by signing a canonical challenge string, and proves knowledge of the account **password** (Argon2id hash on the server, minimum 12 characters). An optional server-side `PASSWORD_PEPPER` is mixed into the password before hashing.
+
+On success the server returns a JWT (7 day expiry) signed with `JWT_SECRET`. The backend refuses to start token operations if `JWT_SECRET` is unset.
+
+Remaining weaknesses (demo scope):
+
+- No second factor, email verification, or recovery flow
+- Usernames are first-come; anyone can register an unused name if they know the password policy
+- A stolen JWT grants full API and WebSocket access until expiry
+- Compromise of `localStorage` exposes auth signing keys and allows offline password guessing only against the server hash (not the signing key directly for login without also stealing the challenge flow)
+- E2E identity keys are separate from auth keys; verifying a password does not prove possession of the chat identity key
 
 **Key Authenticity**
 Public keys are exchanged over the WebSocket connection and stored server-side for
@@ -59,6 +71,9 @@ key for a user (man-in-the-middle). Three mitigations are in place:
    a visible warning banner is displayed urging out-of-band verification.
 3. **Local key pinning**: the client persists the last-seen key for each peer in
    `localStorage`. Cross-session key changes are detected automatically.
+
+The log and pinning detect changes; they do not cryptographically prove log integrity
+(no Merkle commitments or signed tree heads).
 
 **Input Validation**
 All HTTP route inputs are validated with Zod schemas before reaching controller logic.
@@ -90,11 +105,16 @@ Ratchet state is held in memory only and is not persisted to localStorage or Ind
 If the user reloads the page or closes the tab, the ratchet state is lost and a new
 session handshake is required. This is a deliberate trade-off: persisting ratchet state
 introduces risks of state desynchronization and stale key material, while the ephemeral
-approach matches the current session model (both users must be online).
+approach matches the current session model (both users must be online to re-establish).
 
 **No X3DH**
 There is no prekey bundle mechanism. Both users must be online simultaneously to establish
 a session. Offline message initiation is not supported.
+
+**Two-party rooms (design limit, not enforced)**
+The Double Ratchet is a pairwise protocol. The UI and client state assume a single peer
+per room. The server does not reject a third member; additional joiners can break E2E for
+everyone because only one `recipientPublicKey` is tracked.
 
 **No metadata protection**
 Message timing, size, and room membership are visible to the server and any network
@@ -102,13 +122,18 @@ observer. Padding and cover traffic would reduce size leakage; a mixnet would re
 timing correlation.
 
 **Single device**
-Identity keys live in localStorage in one browser. There is no mechanism to sync keys
-across devices or recover them if localStorage is cleared.
+Identity and auth signing keys live in `localStorage` in one browser. There is no
+mechanism to sync keys across devices or recover them if `localStorage` is cleared.
 
 **Open registration**
-Any username can be registered without a password or proof of identity. This is
-intentional for the demo but means account impersonation is trivial before a key
-fingerprint has been verified.
+Any unused username can be registered with a password and browser-generated auth key.
+There is no global identity provider or proof of real-world identity. Username squatting
+and phishing-style registration remain possible until users verify fingerprints out-of-band.
+
+**Unauthenticated public key lookup**
+`GET /users/:userId/public-key` does not require a JWT. Anyone who knows or guesses a user
+UUID can fetch the current chat public key. This simplifies bootstrapping but increases
+metadata exposure and enables passive key harvesting.
 
 **No message deletion**
 The server retains all ciphertext indefinitely. There is no expiry, deletion, or
@@ -121,3 +146,4 @@ disappearing message mechanism.
 - X3DH / offline session initiation
 - Ratchet state persistence across page reloads
 - Cryptographic proofs over the key log (e.g. Merkle tree commitments)
+- Enforcing a two-member cap per room at the API layer
