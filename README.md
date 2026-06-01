@@ -70,22 +70,21 @@ cd frontend && npm test     # Crypto + Double Ratchet tests
 
 ## Project Structure
 
-```
-frontend/
-  src/crypto/              Double Ratchet, ECDH, HKDF, AES-GCM (Web Crypto API)
-  src/pages/               Chat UI with key transparency warnings
-
-backend/src/
-  routes/                  HTTP endpoints with Zod schema validation
-  controllers/             Request/response orchestration
-  services/                Business logic and authorization
-  models/                  SQLite data access (better-sqlite3, WAL mode)
-  middleware/              JWT auth + Zod validation middleware
-  websocket/               Auth, routing, room state, persistence
-
-crypto-spec/               Protocol specification and threat model
-.github/workflows/         CI on push/PR (test, typecheck, audit, Docker build)
-```
+- **`.github/workflows/`** — CI on push/PR: backend/frontend tests, TypeScript check, production `npm audit`, Docker build
+- **`crypto-spec/`** — Protocol specification ([`key-exchange.md`](crypto-spec/key-exchange.md)) and [threat model](crypto-spec/threat-model.md)
+- **`frontend/src/`**
+  - `crypto/` — Double Ratchet, ECDH, HKDF, AES-GCM (Web Crypto API only)
+  - `pages/` — `Login.tsx`, `ChatRoom.tsx` (key transparency warnings)
+  - `components/` — Room selector and shared UI
+- **`backend/src/`**
+  - `routes/` — HTTP API (`auth`, `rooms`, `keys`, `users`)
+  - `controllers/` — Request handlers
+  - `services/` — Auth (Argon2 + signed challenge), rooms, key transparency log
+  - `models/` — SQLite via better-sqlite3 (WAL)
+  - `middleware/` — JWT verification and Zod validation
+  - `websocket/` — Authenticated relay, rate limits, room state
+- **`docker-compose.yml`** — Local stack (frontend nginx + backend API)
+- **`.env.example`** — Required env vars (`JWT_SECRET`, optional `PASSWORD_PEPPER`)
 
 ---
 
