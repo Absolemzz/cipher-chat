@@ -11,7 +11,7 @@ Backend service for Cipher chat, an end-to-end encrypted chat application. This 
 - Auth: JWT bearer tokens
 - Logging and hardening: `morgan`, CORS, rate limiting
 - Input validation: Zod schemas on all route inputs
-- Testing: Vitest + supertest (40 API tests + 9 WebSocket integration tests)
+- Testing: Vitest + supertest (34 API tests + 9 WebSocket integration tests)
 
 ## Architecture
 
@@ -105,7 +105,7 @@ backend/
 
 SQLite schema is initialized in `src/db.js` with WAL journal mode enabled:
 
-- `users(id, username, public_key, public_key_hash)`
+- `users(id, username, password_hash, public_key, auth_public_key)`
 - `rooms(id, code)`
 - `messages(id, room_id, sender_id, ciphertext, timestamp)`
 - `user_rooms(user_id, room_id, joined_at, PRIMARY KEY(user_id, room_id))`
@@ -170,10 +170,12 @@ Server starts on:
 ## Environment Variables
 
 - `BACKEND_PORT` (default `4000`)
-- `JWT_SECRET` (default `dev_secret_for_demo_only`)
+- `JWT_SECRET` (required; the backend refuses to sign or verify tokens without it)
+- `PASSWORD_PEPPER` (optional; appended before Argon2id password hashing)
 - `DB_PATH` (default `./data/messages.db`, use `:memory:` for tests)
 
-For production-like deployments, always set a strong `JWT_SECRET`.
+Set `JWT_SECRET` to a strong random value before running the backend.
+If you set `PASSWORD_PEPPER`, keep it stable; rotating it invalidates existing passwords.
 
 ## Operational Notes
 

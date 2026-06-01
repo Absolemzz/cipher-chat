@@ -11,17 +11,13 @@ npm test
 
 ## Coverage
 
-### Legacy crypto (18 tests)
+### Key fingerprints (3 tests)
 
-- **Session root derivation:** ECDH commutativity, different peers produce different roots, deterministic for same inputs
-- **Per-message keys:** different indices produce different keys, same index is deterministic, negative/fractional index rejection
-- **Encrypt/decrypt roundtrip:** basic plaintext, unicode + emoji, empty string, sequential messages, out-of-order decryption
-- **Ciphertext integrity:** tampered ciphertext rejected (AES-GCM authentication), wrong session root rejected, random IV uniqueness
-- **Key fingerprints:** format validation (colon-separated hex), deterministic, unique per key
+- Format validation (colon-separated uppercase hex), deterministic for the same key, unique across different keys
 
-### Double Ratchet (19 tests)
+### Double Ratchet (20 tests)
 
-- **Basic roundtrip:** encrypt/decrypt across initiator and responder
+- **Basic roundtrip:** encrypt/decrypt across participants; either side can send the first message
 - **Message content:** unicode, emoji, empty strings
 - **Symmetric ratchet:** multiple messages in the same direction without DH ratchet
 - **DH ratchet:** turn-taking triggers DH key rotation, extended multi-turn conversations

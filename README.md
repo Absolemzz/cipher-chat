@@ -52,14 +52,14 @@ The server never sees message plaintext or private ratchet keys.
 
 ## Testing
 
-**86 automated tests** across four layers:
+**66 automated tests** across four layers:
 
 | Layer | Framework | Count | Coverage |
 |-------|-----------|:-----:|----------|
-| Backend API | Vitest + Supertest | 40 | Auth, keys, rooms, key transparency log, Zod validation |
+| Backend API | Vitest + Supertest | 34 | Password + signed-challenge auth, keys, rooms, key transparency log, Zod validation |
 | Backend WebSocket | Vitest + ws | 9 | Auth handshake, room authorization, message relay |
-| Frontend crypto | Vitest + Web Crypto | 18 | ECDH, HKDF, AES-GCM, key fingerprints |
-| Double Ratchet | Vitest + Web Crypto | 19 | Roundtrip, forward secrecy, out-of-order, AEAD binding, DoS bounds |
+| Frontend crypto | Vitest + Web Crypto | 3 | Key fingerprints |
+| Double Ratchet | Vitest + Web Crypto | 20 | Bidirectional first message, forward secrecy, out-of-order, AEAD binding, DoS bounds |
 
 ```bash
 cd backend  && npm test     # API + WebSocket tests
@@ -84,7 +84,7 @@ backend/src/
   websocket/               Auth, routing, room state, persistence
 
 crypto-spec/               Protocol specification and threat model
-infra/                     GitHub Actions CI workflow
+.github/workflows/         CI on push/PR (test, typecheck, audit, Docker build)
 ```
 
 ---
