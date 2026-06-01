@@ -33,7 +33,6 @@ export type WsClientMessage =
       from: string;
       ciphertext: string;
       timestamp: number;
-      fromPublicKey?: string;
     }
   | {
       type: 'public_key';

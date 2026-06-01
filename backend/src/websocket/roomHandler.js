@@ -1,5 +1,5 @@
 const WebSocket = require('ws');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const db = require('../db');
 const Room = require('../models/Room');
 const { saveMessage } = require('./queue');
@@ -79,12 +79,6 @@ function handlePublicKey(msg, ws, user) {
   }
 }
 
-function handleLeave(msg, ws) {
-  const roomId = msg.roomId;
-  if (rooms.has(roomId)) rooms.get(roomId).delete(ws);
-  ws.send(JSON.stringify({ type: 'left', roomId }));
-}
-
 function handleCiphertext(msg, ws, user) {
   const { roomId, ciphertext, timestamp } = msg;
   if (!roomId || roomId !== ws._roomId) {
@@ -102,7 +96,7 @@ function handleCiphertext(msg, ws, user) {
     return;
   }
 
-  const id = msg.id || uuidv4();
+  const id = msg.id || crypto.randomUUID();
 
   saveMessage(id, roomId, user.id, ciphertext, timestamp || Date.now());
 
@@ -132,7 +126,6 @@ function handleDisconnect(ws) {
 module.exports = {
   handleJoin,
   handlePublicKey,
-  handleLeave,
   handleCiphertext,
   handleDisconnect
 };

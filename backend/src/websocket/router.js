@@ -1,7 +1,6 @@
 const {
   handleJoin,
   handlePublicKey,
-  handleLeave,
   handleCiphertext
 } = require('./roomHandler');
 
@@ -15,9 +14,6 @@ function handleMessage(raw, ws, user) {
         return;
       case 'public_key':
         handlePublicKey(msg, ws, user);
-        return;
-      case 'leave':
-        handleLeave(msg, ws, user);
         return;
       case 'ciphertext':
         handleCiphertext(msg, ws, user);

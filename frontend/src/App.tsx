@@ -15,5 +15,5 @@ export default function App() {
     </div>
   );
 
-  return <ChatRoom user={user} room={room} onLeave={() => setRoom(null)} />;
+  return <ChatRoom user={user} room={room} />;
 }

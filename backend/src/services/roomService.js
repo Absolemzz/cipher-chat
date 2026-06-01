@@ -1,8 +1,8 @@
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const Room = require('../models/Room');
 
 async function createRoomForUser(userId) {
-  const id = uuidv4();
+  const id = crypto.randomUUID();
   const code = Math.random().toString(36).slice(2, 8);
 
   Room.create({ id, code });
