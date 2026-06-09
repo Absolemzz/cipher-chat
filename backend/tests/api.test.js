@@ -1,17 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import { generateKeyPairSync, sign as cryptoSign } from 'crypto';
+import { createRequire } from 'module';
 
 process.env.DB_PATH = ':memory:';
 process.env.JWT_SECRET = 'test_jwt_secret';
 
 const { default: app } = await import('../src/app.js');
+const require = createRequire(import.meta.url);
 
 let userA = {};
 let userB = {};
 let roomId = '';
 let roomCode = '';
 const DEFAULT_PASSWORD = 'correct horse battery staple';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createAuthKeyPair() {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
@@ -22,11 +28,10 @@ function createAuthKeyPair() {
 }
 
 function signChallenge(privateKey, challenge) {
-  return cryptoSign(
-    'sha256',
-    Buffer.from(challenge, 'utf8'),
-    { key: privateKey, dsaEncoding: 'ieee-p1363' }
-  ).toString('base64');
+  return cryptoSign('sha256', Buffer.from(challenge, 'utf8'), {
+    key: privateKey,
+    dsaEncoding: 'ieee-p1363',
+  }).toString('base64');
 }
 
 async function signedRegister(username, options = {}) {
@@ -54,14 +59,12 @@ async function signedLogin(user, password = user.password) {
     .post('/auth/challenge')
     .send({ username: user.username, purpose: 'login' });
   const signature = signChallenge(user.auth.privateKey, challenge.body.challenge);
-  return request(app)
-    .post('/auth/login')
-    .send({
-      username: user.username,
-      password,
-      challengeId: challenge.body.challengeId,
-      signature,
-    });
+  return request(app).post('/auth/login').send({
+    username: user.username,
+    password,
+    challengeId: challenge.body.challengeId,
+    signature,
+  });
 }
 
 describe('health', () => {
@@ -70,6 +73,78 @@ describe('health', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
     expect(res.body).toHaveProperty('timestamp');
+    expect(res.headers['x-request-id']).toBeTruthy();
+  });
+
+  it('preserves caller-provided request id', async () => {
+    const res = await request(app).get('/healthz').set('x-request-id', 'test-request-id-1');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-request-id']).toBe('test-request-id-1');
+  });
+});
+
+describe('observability', () => {
+  it('exposes Prometheus metrics without auth', async () => {
+    const res = await request(app).get('/metrics');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/plain');
+    expect(res.text).toContain('cipher_chat_http_requests_total');
+    expect(res.text).toContain('cipher_chat_http_request_duration_seconds');
+    expect(res.text).toContain('cipher_chat_ws_active_connections');
+  });
+
+  it('rejects metrics without token when METRICS_TOKEN is set', async () => {
+    process.env.METRICS_TOKEN = 'test_metrics_token';
+    try {
+      const res = await request(app).get('/metrics');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toMatch(/metrics token/i);
+    } finally {
+      delete process.env.METRICS_TOKEN;
+    }
+  });
+
+  it('rejects metrics with the wrong token when METRICS_TOKEN is set', async () => {
+    process.env.METRICS_TOKEN = 'test_metrics_token';
+    try {
+      const res = await request(app).get('/metrics').set('Authorization', 'Bearer wrong-token');
+
+      expect(res.status).toBe(401);
+    } finally {
+      delete process.env.METRICS_TOKEN;
+    }
+  });
+
+  it('accepts metrics with the correct token when METRICS_TOKEN is set', async () => {
+    process.env.METRICS_TOKEN = 'test_metrics_token';
+    try {
+      const res = await request(app)
+        .get('/metrics')
+        .set('Authorization', 'Bearer test_metrics_token');
+
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('cipher_chat_http_requests_total');
+    } finally {
+      delete process.env.METRICS_TOKEN;
+    }
+  });
+
+  it('does not expose stack traces in production error responses', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const res = await request(app).get('/__test__/error');
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('internal server error');
+      expect(JSON.stringify(res.body)).not.toMatch(/synthetic stack leak check|at /);
+      expect(res.headers['x-request-id']).toBeTruthy();
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 });
 
@@ -85,18 +160,18 @@ describe('auth', () => {
   });
 
   it('rejects duplicate username', async () => {
-    const res = await request(app)
-      .post('/auth/challenge')
-      .send({ username: 'alice', purpose: 'register', authPublicKey: createAuthKeyPair().authPublicKey });
+    const res = await request(app).post('/auth/challenge').send({
+      username: 'alice',
+      purpose: 'register',
+      authPublicKey: createAuthKeyPair().authPublicKey,
+    });
 
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/already taken/i);
   });
 
   it('rejects empty username', async () => {
-    const res = await request(app)
-      .post('/auth/register')
-      .send({});
+    const res = await request(app).post('/auth/register').send({});
 
     expect(res.status).toBe(400);
   });
@@ -117,9 +192,7 @@ describe('auth', () => {
   });
 
   it('rejects bare username login', async () => {
-    const res = await request(app)
-      .post('/auth/login')
-      .send({ username: 'alice' });
+    const res = await request(app).post('/auth/login').send({ username: 'alice' });
 
     expect(res.status).toBe(400);
   });
@@ -146,7 +219,8 @@ describe('auth', () => {
       .post('/auth/challenge')
       .send({ username: 'nonexistent', purpose: 'login' });
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/invalid username or password/i);
   });
 
   it('registers a second user', async () => {
@@ -186,8 +260,7 @@ describe('key publishing', () => {
   });
 
   it('published key is retrievable', async () => {
-    const res = await request(app)
-      .get(`/users/${userA.id}/public-key`);
+    const res = await request(app).get(`/users/${userA.id}/public-key`);
 
     expect(res.status).toBe(200);
     expect(res.body.publicKey).toBe('alice-pub-key');
@@ -202,15 +275,37 @@ describe('rooms', () => {
   });
 
   it('creates a room', async () => {
-    const res = await request(app)
-      .post('/rooms')
-      .set('Authorization', `Bearer ${userA.token}`);
+    const res = await request(app).post('/rooms').set('Authorization', `Bearer ${userA.token}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('id');
     expect(res.body).toHaveProperty('code');
     roomId = res.body.id;
     roomCode = res.body.code;
+  });
+
+  it('uses secure fixed-length room codes without Math.random', async () => {
+    const mathRandom = vi.spyOn(Math, 'random');
+
+    const res = await request(app).post('/rooms').set('Authorization', `Bearer ${userA.token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.code).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+    expect(mathRandom).not.toHaveBeenCalled();
+  });
+
+  it('retries room code generation on UNIQUE collision', async () => {
+    const nodeCrypto = require('crypto');
+    const Room = require('../src/models/Room');
+    Room.create({ id: nodeCrypto.randomUUID(), code: 'AAAAAA' });
+
+    const randomValues = [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1];
+    vi.spyOn(nodeCrypto, 'randomInt').mockImplementation(() => randomValues.shift() ?? 1);
+
+    const res = await request(app).post('/rooms').set('Authorization', `Bearer ${userA.token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.code).toBe('BBBBBB');
   });
 
   it('joins a room by code', async () => {
@@ -220,6 +315,17 @@ describe('rooms', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(roomId);
+  });
+
+  it('rejects a third user joining a two-party room', async () => {
+    const { res: reg } = await signedRegister('charlie');
+
+    const res = await request(app)
+      .get(`/rooms/${roomCode}`)
+      .set('Authorization', `Bearer ${reg.body.token}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/room is full/i);
   });
 
   it('returns 404 for invalid room code', async () => {
@@ -232,13 +338,13 @@ describe('rooms', () => {
 });
 
 describe('room authorization', () => {
-  it('member can read messages', async () => {
+  it('member cannot replay server message history', async () => {
     const res = await request(app)
       .get(`/rooms/${roomId}/messages`)
       .set('Authorization', `Bearer ${userA.token}`);
 
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.status).toBe(410);
+    expect(res.body.error).toMatch(/server message history is disabled/i);
   });
 
   it('non-member cannot read messages', async () => {
@@ -299,18 +405,14 @@ describe('key transparency log', () => {
 
 describe('input validation', () => {
   it('rejects register with empty body', async () => {
-    const res = await request(app)
-      .post('/auth/register')
-      .send({});
+    const res = await request(app).post('/auth/register').send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('validation error');
     expect(res.body.details).toBeDefined();
   });
 
   it('rejects login with empty body', async () => {
-    const res = await request(app)
-      .post('/auth/login')
-      .send({});
+    const res = await request(app).post('/auth/login').send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('validation error');
   });
@@ -333,8 +435,7 @@ describe('input validation', () => {
   });
 
   it('rejects public-key endpoint with non-uuid', async () => {
-    const res = await request(app)
-      .get('/users/not-a-uuid/public-key');
+    const res = await request(app).get('/users/not-a-uuid/public-key');
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('validation error');
   });
@@ -350,13 +451,12 @@ describe('input validation', () => {
 
 describe('user rooms', () => {
   it('rejects unauthenticated room listing', async () => {
-    const res = await request(app)
-      .get(`/users/${userA.id}/rooms`);
+    const res = await request(app).get(`/users/${userA.id}/rooms`);
 
     expect(res.status).toBe(401);
   });
 
-  it('rejects accessing another user\'s rooms', async () => {
+  it("rejects accessing another user's rooms", async () => {
     const res = await request(app)
       .get(`/users/${userA.id}/rooms`)
       .set('Authorization', `Bearer ${userB.token}`);

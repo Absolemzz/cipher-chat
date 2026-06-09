@@ -32,5 +32,5 @@ async function getRoomMessages(req, res, next) {
 module.exports = {
   createRoom,
   joinRoom,
-  getRoomMessages
+  getRoomMessages,
 };

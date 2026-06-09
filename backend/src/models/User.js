@@ -1,12 +1,14 @@
 const db = require('../db');
 
 function findByUsername(username) {
-  return db.prepare('SELECT id, username, password_hash, auth_public_key FROM users WHERE username = ?').get(username);
+  return db
+    .prepare('SELECT id, username, password_hash, auth_public_key FROM users WHERE username = ?')
+    .get(username);
 }
 
 function create({ id, username, passwordHash, publicKey, authPublicKey }) {
   db.prepare(
-    'INSERT INTO users (id, username, password_hash, public_key, auth_public_key) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO users (id, username, password_hash, public_key, auth_public_key) VALUES (?, ?, ?, ?, ?)',
   ).run(id, username, passwordHash, publicKey || null, authPublicKey || null);
   return { id, username, passwordHash, publicKey, authPublicKey };
 }
@@ -20,21 +22,33 @@ function updatePublicKey(userId, publicKey) {
 }
 
 function appendKeyLog(userId, publicKey, publishedAt) {
-  db.prepare('INSERT INTO key_log (user_id, public_key, published_at) VALUES (?, ?, ?)').run(userId, publicKey, publishedAt);
+  db.prepare('INSERT INTO key_log (user_id, public_key, published_at) VALUES (?, ?, ?)').run(
+    userId,
+    publicKey,
+    publishedAt,
+  );
 }
 
 function getKeyLog(userId) {
-  return db.prepare('SELECT id, public_key, published_at FROM key_log WHERE user_id = ? ORDER BY published_at ASC').all(userId);
+  return db
+    .prepare(
+      'SELECT id, public_key, published_at FROM key_log WHERE user_id = ? ORDER BY published_at ASC',
+    )
+    .all(userId);
 }
 
 function findRoomsByUserId(userId) {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT r.id, r.code, ur.joined_at
     FROM user_rooms ur
     JOIN rooms r ON ur.room_id = r.id
     WHERE ur.user_id = ?
     ORDER BY ur.joined_at DESC
-  `).all(userId);
+  `,
+    )
+    .all(userId);
 }
 
 function removeFromRoom(userId, roomId) {

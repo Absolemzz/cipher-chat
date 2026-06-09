@@ -17,13 +17,6 @@ CREATE TABLE IF NOT EXISTS rooms (
   id TEXT PRIMARY KEY,
   code TEXT UNIQUE NOT NULL
 );
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  room_id TEXT NOT NULL,
-  sender_id TEXT NOT NULL,
-  ciphertext TEXT NOT NULL,
-  timestamp INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS user_rooms (
   user_id TEXT NOT NULL,
   room_id TEXT NOT NULL,
@@ -48,14 +41,19 @@ CREATE TABLE IF NOT EXISTS auth_challenges (
 );
 `);
 
-try { db.exec('ALTER TABLE users ADD COLUMN public_key TEXT'); } catch (_) {}
-try { db.exec('ALTER TABLE users ADD COLUMN auth_public_key TEXT'); } catch (_) {}
-try { db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT'); } catch (_) {}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN public_key TEXT');
+} catch (_) {}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN auth_public_key TEXT');
+} catch (_) {}
+try {
+  db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+} catch (_) {}
 
 try {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_code ON rooms(code)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id, timestamp)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_user_rooms_user ON user_rooms(user_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_key_log_user ON key_log(user_id, published_at)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_auth_challenges_expiry ON auth_challenges(expires_at)');

@@ -8,7 +8,7 @@ function validate(schema) {
     if (!result.success) {
       return res.status(400).json({
         error: 'validation error',
-        details: result.error.issues.map(e => ({
+        details: result.error.issues.map((e) => ({
           path: e.path.join('.'),
           message: e.message,
         })),

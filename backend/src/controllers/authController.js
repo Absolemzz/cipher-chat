@@ -30,5 +30,5 @@ async function login(req, res, next) {
 module.exports = {
   challenge,
   register,
-  login
+  login,
 };

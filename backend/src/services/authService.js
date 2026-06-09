@@ -30,11 +30,7 @@ function makeChallengeText({ purpose, username, challengeId, nonce }) {
 }
 
 function signToken(user) {
-  return jwt.sign(
-    { id: user.id, username: user.username },
-    getJwtSecret(),
-    { expiresIn: '7d' }
-  );
+  return jwt.sign({ id: user.id, username: user.username }, getJwtSecret(), { expiresIn: '7d' });
 }
 
 function passwordInput(password) {
@@ -63,8 +59,10 @@ function verifyChallengeSignature(authPublicKey, challenge, signature) {
     const data = Buffer.from(challenge, 'utf8');
     const sig = Buffer.from(signature, 'base64');
 
-    return crypto.verify('sha256', data, key, sig) ||
-      crypto.verify('sha256', data, { key, dsaEncoding: 'ieee-p1363' }, sig);
+    return (
+      crypto.verify('sha256', data, key, sig) ||
+      crypto.verify('sha256', data, { key, dsaEncoding: 'ieee-p1363' }, sig)
+    );
   } catch (_) {
     return false;
   }
@@ -93,7 +91,7 @@ async function createChallenge({ username, purpose, authPublicKey }) {
   }
 
   if (purpose === 'login') {
-    if (!existingUser) throw httpError('User not found', 404);
+    if (!existingUser) throw httpError('invalid username or password', 401);
     if (!existingUser.auth_public_key) {
       throw httpError('account is missing an authentication key', 409);
     }
@@ -162,7 +160,7 @@ async function login({ username, password, challengeId, signature }) {
     throw httpError('challenge already used', 400);
   }
   if (!user.password_hash) throw httpError('account is missing a password hash', 409);
-  if (!await verifyPassword(user.password_hash, password)) {
+  if (!(await verifyPassword(user.password_hash, password))) {
     throw httpError('invalid username or password', 401);
   }
 
@@ -173,5 +171,5 @@ async function login({ username, password, challengeId, signature }) {
 module.exports = {
   createChallenge,
   register,
-  login
+  login,
 };

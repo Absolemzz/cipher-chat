@@ -1,23 +1,57 @@
 const crypto = require('crypto');
 const Room = require('../models/Room');
 
+const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const ROOM_CODE_LENGTH = 6;
+const MAX_CODE_GENERATION_ATTEMPTS = 10;
+const MAX_ROOM_MEMBERS = 2;
+
+function httpError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function generateRoomCode() {
+  let code = '';
+  for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
+    code += ROOM_CODE_ALPHABET[crypto.randomInt(ROOM_CODE_ALPHABET.length)];
+  }
+  return code;
+}
+
+function isUniqueConstraint(error) {
+  return (
+    error?.code === 'SQLITE_CONSTRAINT_UNIQUE' || error?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY'
+  );
+}
+
 async function createRoomForUser(userId) {
-  const id = crypto.randomUUID();
-  const code = Math.random().toString(36).slice(2, 8);
+  for (let attempt = 0; attempt < MAX_CODE_GENERATION_ATTEMPTS; attempt++) {
+    const id = crypto.randomUUID();
+    const code = generateRoomCode();
 
-  Room.create({ id, code });
-  Room.addUserToRoom(userId, id, Date.now());
+    try {
+      Room.create({ id, code });
+      Room.addUserToRoom(userId, id, Date.now());
+      return { id, code };
+    } catch (error) {
+      if (!isUniqueConstraint(error)) throw error;
+    }
+  }
 
-  return { id, code };
+  throw httpError('could not generate a unique room code', 500);
 }
 
 async function joinRoomByCode(userId, code) {
   const room = Room.findByCode(code);
 
   if (!room) {
-    const error = new Error('room not found');
-    error.status = 404;
-    throw error;
+    throw httpError('room not found', 404);
+  }
+
+  if (!Room.isUserInRoom(userId, room.id) && Room.countMembers(room.id) >= MAX_ROOM_MEMBERS) {
+    throw httpError('room is full', 409);
   }
 
   Room.addUserToRoomIgnore(userId, room.id, Date.now());
@@ -31,11 +65,11 @@ async function getMessagesByRoomId(userId, roomId) {
     error.status = 403;
     throw error;
   }
-  return Room.findMessagesByRoomId(roomId);
+  throw httpError('server message history is disabled; use local encrypted client history', 410);
 }
 
 module.exports = {
   createRoomForUser,
   joinRoomByCode,
-  getMessagesByRoomId
+  getMessagesByRoomId,
 };

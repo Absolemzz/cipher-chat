@@ -2,7 +2,7 @@ const User = require('../models/User');
 
 async function getRooms(requesterId, userId) {
   if (requesterId !== userId) {
-    const error = new Error('cannot access another user\'s rooms');
+    const error = new Error("cannot access another user's rooms");
     error.status = 403;
     throw error;
   }
@@ -11,7 +11,7 @@ async function getRooms(requesterId, userId) {
 
 async function leaveRoom(requesterId, userId, roomId) {
   if (requesterId !== userId) {
-    const error = new Error('cannot modify another user\'s rooms');
+    const error = new Error("cannot modify another user's rooms");
     error.status = 403;
     throw error;
   }
