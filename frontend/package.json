@@ -6,7 +6,11 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 3000",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --config ../prettier.config.cjs --ignore-path ../.prettierignore --write .",
+    "format:check": "prettier --config ../prettier.config.cjs --ignore-path ../.prettierignore --check ."
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -14,15 +18,25 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.2.21",
     "@types/react-dom": "^18.2.7",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.0.0",
-    "@vitest/coverage-v8": "^4.1.4",
     "autoprefixer": "^10.4.21",
+    "eslint": "^10.4.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "fake-indexeddb": "^6.2.5",
+    "globals": "^17.6.0",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.6",
+    "prettier": "^3.8.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.1.6",
+    "typescript-eslint": "^8.60.1",
     "vite": "^5.0.0",
     "vitest": "^4.1.4"
   }
