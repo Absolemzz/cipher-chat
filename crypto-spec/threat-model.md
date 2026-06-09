@@ -25,7 +25,8 @@ infer communication patterns.
 
 **Confidentiality**
 Messages are encrypted client-side with AES-GCM-256 before transmission. The server
-stores and relays only ciphertext. A server breach does not expose message contents.
+relays ciphertext in memory only and does not persist message contents. A server
+breach does not expose message plaintext.
 
 **Integrity**
 AES-GCM is an authenticated encryption scheme. A ciphertext that has been tampered with
@@ -100,21 +101,26 @@ If an attacker gains temporary access to ratchet state, security is restored on 
 DH ratchet step (triggered by the peer's reply). This is a property of the DH ratchet
 but requires the attacker to lose access before the next turn.
 
-**Ephemeral ratchet state**
-Ratchet state is held in memory only and is not persisted to localStorage or IndexedDB.
-If the user reloads the page or closes the tab, the ratchet state is lost and a new
-session handshake is required. This is a deliberate trade-off: persisting ratchet state
-introduces risks of state desynchronization and stale key material, while the ephemeral
-approach matches the current session model (both users must be online to re-establish).
+**Persisted ratchet state**
+Ratchet sessions and local transcripts are encrypted in browser IndexedDB
+(`localEncryptedStore.ts`) per user and room. Reloading or switching rooms restores
+the serialized session so in-order decryption can resume. Concurrent encrypt/decrypt
+and multi-tab access are serialized with the Web Locks API (per user/room) so shared
+IndexedDB state cannot be corrupted by interleaved mutations.
+
+**Live relay only**
+The server does not store ciphertext. Delivery requires the recipient to have an open
+WebSocket at relay time; messages are not replayed from server history after reconnect.
+Clients queue cross-room inbound ciphertext locally until the target room is opened.
 
 **No X3DH**
 There is no prekey bundle mechanism. Both users must be online simultaneously to establish
 a session. Offline message initiation is not supported.
 
-**Two-party rooms (design limit, not enforced)**
+**Two-party rooms**
 The Double Ratchet is a pairwise protocol. The UI and client state assume a single peer
-per room. The server does not reject a third member; additional joiners can break E2E for
-everyone because only one `recipientPublicKey` is tracked.
+per room. REST join and WebSocket `join` both enforce a two-member cap; a third member
+cannot join.
 
 **No metadata protection**
 Message timing, size, and room membership are visible to the server and any network
@@ -135,15 +141,14 @@ and phishing-style registration remain possible until users verify fingerprints 
 UUID can fetch the current chat public key. This simplifies bootstrapping but increases
 metadata exposure and enables passive key harvesting.
 
-**No message deletion**
-The server retains all ciphertext indefinitely. There is no expiry, deletion, or
-disappearing message mechanism.
+**No server-side message store**
+The server does not persist ciphertext, so there is no server-side deletion or
+disappearing-message mechanism. Local transcript and ratchet state remain in encrypted
+IndexedDB until the user clears browser storage or intentionally leaves a room.
 
 ## Out of Scope
 
 - Multi-party rooms with per-recipient encryption
 - Anonymity or traffic analysis resistance
 - X3DH / offline session initiation
-- Ratchet state persistence across page reloads
 - Cryptographic proofs over the key log (e.g. Merkle tree commitments)
-- Enforcing a two-member cap per room at the API layer

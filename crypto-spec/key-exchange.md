@@ -185,7 +185,9 @@ Each message is encrypted with AES-GCM-256:
 5. User A receives B's public key, initializes their side of the session
 6. Both clients derive independent initial send/receive chains, so either user can
    send the first message
-7. Messages received before the session is ready are queued and decrypted once established
+7. Messages received before the session is ready, or for a non-selected room, are queued
+   locally (in-memory or encrypted IndexedDB `pending-ciphertext` records) and decrypted
+   once the room session is ready
 
 ## Key Fingerprints
 
@@ -209,10 +211,11 @@ verify their peer's identity out-of-band, detecting a potential man-in-the-middl
 - **No X3DH (prekey bundles)**. Both users must be online to establish a session. There
   is no signed prekey or one-time prekey for offline session initiation.
 - **2-party only**. The ratchet operates between exactly two peers in a room.
-- **Ephemeral state**. Ratchet state lives in memory for the session duration. Reloading
-  the page requires a new session handshake. This avoids the risks of stale persisted
-  ratchet state but means message history from the current session cannot be re-decrypted
-  after reload.
+- **Persisted session state**. Ratchet sessions serialize to encrypted IndexedDB per
+  user/room and resume after reload or room switch. Encrypt/decrypt mutations are
+  serialized with the Web Locks API so multiple tabs cannot corrupt shared state.
+- **Live relay only**. The server relays ciphertext in memory and does not store it.
+  Peers must be online with an open WebSocket to receive messages in real time.
 - **Single device**. Identity keys are stored in localStorage and tied to one browser.
   There is no key sync or multi-device support.
 - **Trust on first use**. Key fingerprint verification is manual and optional. The key
