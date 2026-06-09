@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   generateDHKeyPair,
   createBidirectionalSession,
+  deserializeRatchetSession,
   ratchetEncrypt,
   ratchetDecrypt,
+  serializeRatchetSession,
   type RatchetSession,
 } from './double-ratchet';
 
@@ -14,22 +16,34 @@ function buf2b64(buf: ArrayBuffer | Uint8Array): string {
 
 async function sharedSecretFromPair(
   a: { pub: string; priv: string },
-  b: { pub: string; priv: string }
+  b: { pub: string; priv: string },
 ): Promise<ArrayBuffer> {
   const HKDF_ZERO_SALT = new Uint8Array(32);
   const privKey = await crypto.subtle.importKey(
-    'pkcs8', Uint8Array.from(atob(a.priv), c => c.charCodeAt(0)),
-    { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']
+    'pkcs8',
+    Uint8Array.from(atob(a.priv), (c) => c.charCodeAt(0)),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveBits'],
   );
   const pubKey = await crypto.subtle.importKey(
-    'raw', Uint8Array.from(atob(b.pub), c => c.charCodeAt(0)),
-    { name: 'ECDH', namedCurve: 'P-256' }, false, []
+    'raw',
+    Uint8Array.from(atob(b.pub), (c) => c.charCodeAt(0)),
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    [],
   );
   const raw = await crypto.subtle.deriveBits({ name: 'ECDH', public: pubKey }, privKey, 256);
   const hkdf = await crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveBits']);
   return crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt: HKDF_ZERO_SALT, info: new TextEncoder().encode('session_root_v1') },
-    hkdf, 256
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: HKDF_ZERO_SALT,
+      info: new TextEncoder().encode('session_root_v1'),
+    },
+    hkdf,
+    256,
   );
 }
 
@@ -37,7 +51,12 @@ async function sharedSecretFromPair(
  * Helper: set up Alice (initiator) and Bob (responder) with a fresh
  * shared secret derived from identity ECDH, mirroring initDoubleRatchet.
  */
-async function setupPair(): Promise<{ alice: RatchetSession; bob: RatchetSession; aliceId: { pub: string; priv: string }; bobId: { pub: string; priv: string } }> {
+async function setupPair(): Promise<{
+  alice: RatchetSession;
+  bob: RatchetSession;
+  aliceId: { pub: string; priv: string };
+  bobId: { pub: string; priv: string };
+}> {
   const aliceId = await generateDHKeyPair();
   const bobId = await generateDHKeyPair();
 
@@ -335,7 +354,7 @@ describe('Double Ratchet — tampered messages', () => {
     const { ciphertext } = await ratchetEncrypt(sender, 'secret');
     const parsed = JSON.parse(ciphertext);
 
-    const ctBytes = Uint8Array.from(atob(parsed.ct), c => c.charCodeAt(0));
+    const ctBytes = Uint8Array.from(atob(parsed.ct), (c) => c.charCodeAt(0));
     ctBytes[0] ^= 0xff;
     parsed.ct = btoa(String.fromCharCode(...ctBytes));
 
@@ -507,5 +526,40 @@ describe('Double Ratchet — AEAD associated data binds header to ciphertext', (
     // AES-GCM AEAD should reject this because the associated data
     // (derived from the header) won't match what was used during encryption
     await expect(ratchetDecrypt(receiver, swapped)).rejects.toThrow();
+  });
+});
+
+describe('Double Ratchet — session serialization', () => {
+  it('round-trips session state and continues decrypting', async () => {
+    let { alice, bob } = await setupPair();
+
+    const encrypted = await ratchetEncrypt(alice, 'before serialization');
+    alice = encrypted.session;
+
+    const serializedBob = serializeRatchetSession(bob);
+    const restoredBob = deserializeRatchetSession(serializedBob);
+
+    const decrypted = await ratchetDecrypt(restoredBob, encrypted.ciphertext);
+    expect(decrypted.plaintext).toBe('before serialization');
+    expect(decrypted.session.recvN).toBe(1);
+    expect(serializedBob.version).toBe(1);
+    expect(alice.sendN).toBe(1);
+  });
+
+  it('preserves skipped message keys across serialization', async () => {
+    let { alice, bob } = await setupPair();
+
+    const first = await ratchetEncrypt(alice, 'first');
+    alice = first.session;
+    const second = await ratchetEncrypt(alice, 'second');
+
+    const skipped = await ratchetDecrypt(bob, second.ciphertext);
+    expect(skipped.session.skippedKeys.size).toBe(1);
+
+    const restored = deserializeRatchetSession(serializeRatchetSession(skipped.session));
+    const lateFirst = await ratchetDecrypt(restored, first.ciphertext);
+
+    expect(lateFirst.plaintext).toBe('first');
+    expect(lateFirst.session.skippedKeys.size).toBe(0);
   });
 });

@@ -15,7 +15,7 @@ export interface Message {
   text: string;
   from: string;
   ts: number;
-  status?: string;
+  status?: 'pending' | 'sending' | 'sent' | 'delivered' | 'failed' | string;
 }
 
 export interface RoomHistoryMessage {
@@ -27,9 +27,12 @@ export interface RoomHistoryMessage {
 
 export type WsClientMessage =
   | { type: 'auth_ok'; userId: string }
+  | { type: 'joined'; roomId: string }
   | {
       type: 'ciphertext';
       id: string;
+      clientMessageId?: string;
+      roomId?: string;
       from: string;
       ciphertext: string;
       timestamp: number;
@@ -40,5 +43,21 @@ export type WsClientMessage =
       publicKey: string;
       roomId: string;
     }
-  | { type: 'delivered'; id: string }
+  | {
+      type: 'message.accepted';
+      id: string;
+      clientMessageId: string;
+      duplicate?: boolean;
+      relayAttempted?: boolean;
+      relayTargetCount?: number;
+      roomId: string;
+      timestamp?: number;
+    }
+  | {
+      type: 'message.delivered';
+      id: string;
+      clientMessageId: string;
+      roomId: string;
+      timestamp?: number;
+    }
   | { type: 'error'; message: string };

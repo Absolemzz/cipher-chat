@@ -1,25 +1,27 @@
-import React, { useState } from 'react'
-import type { User, Room } from '../types'
+import React, { useState } from 'react';
+import { apiFetch } from '../lib/transport';
+import type { User, Room } from '../types';
 
 interface ChatRoomSelectorProps {
   onJoin: (room: Room) => void;
+  onLogout: () => void;
   user: User;
 }
 
-export default function ChatRoomSelector({ onJoin, user }: ChatRoomSelectorProps) {
+export default function ChatRoomSelector({ onJoin, onLogout, user }: ChatRoomSelectorProps) {
   const [code, setCode] = useState('');
   async function join() {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms/${code}`, {
-      headers: { 'Authorization': `Bearer ${user.token}` }
+    const res = await apiFetch(`/rooms/${code}`, {
+      headers: { Authorization: `Bearer ${user.token}` },
     });
     const data = await res.json();
     if (data && data.id) onJoin({ id: data.id, code: data.code });
     else alert('room not found');
   }
   async function create() {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms`, { 
+    const res = await apiFetch('/rooms', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${user.token}` }
+      headers: { Authorization: `Bearer ${user.token}` },
     });
     const data = await res.json();
     onJoin({ id: data.id, code: data.code });
@@ -28,11 +30,22 @@ export default function ChatRoomSelector({ onJoin, user }: ChatRoomSelectorProps
     <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900/80 p-8 shadow-xl shadow-black/40">
       <p className="text-center text-sm text-zinc-400">Signed in as</p>
       <p className="mt-1 text-center text-base font-medium text-zinc-100">{user.username}</p>
+      <button
+        type="button"
+        onClick={onLogout}
+        className="mt-3 w-full text-xs font-medium text-zinc-500 hover:text-zinc-200"
+      >
+        Logout
+      </button>
 
       <div className="mt-8 space-y-6">
         <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Create room</h2>
-          <p className="mt-1 text-sm text-zinc-400">Start a new encrypted room and share the invite code.</p>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Create room
+          </h2>
+          <p className="mt-1 text-sm text-zinc-400">
+            Start a new encrypted room and share the invite code.
+          </p>
           <button
             type="button"
             onClick={create}
@@ -43,11 +56,15 @@ export default function ChatRoomSelector({ onJoin, user }: ChatRoomSelectorProps
         </div>
 
         <div className="border-t border-zinc-800 pt-6">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Join with code</h2>
-          <p className="mt-1 text-sm text-zinc-400">Enter an invite code someone shared with you.</p>
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Join with code
+          </h2>
+          <p className="mt-1 text-sm text-zinc-400">
+            Enter an invite code someone shared with you.
+          </p>
           <input
             value={code}
-            onChange={e => setCode(e.target.value)}
+            onChange={(e) => setCode(e.target.value)}
             placeholder="Invite code"
             className="mt-4 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 outline-none ring-0 focus:border-zinc-500"
           />
@@ -61,5 +78,5 @@ export default function ChatRoomSelector({ onJoin, user }: ChatRoomSelectorProps
         </div>
       </div>
     </div>
-  )
+  );
 }

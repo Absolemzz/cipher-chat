@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
-import { ensureAuthSigningKey, ensureKeys, signAuthChallenge } from '../crypto/crypto'
-import type { User } from '../types'
+import React, { useState } from 'react';
+import { ensureAuthSigningKey, ensureKeys, signAuthChallenge } from '../crypto/crypto';
+import { apiFetch } from '../lib/transport';
+import type { User } from '../types';
 
 interface LoginProps {
   onLogin: React.Dispatch<React.SetStateAction<User | null>>;
@@ -19,12 +20,12 @@ export default function Login({ onLogin }: LoginProps) {
   async function requestChallenge(
     currentUsername: string,
     purpose: 'register' | 'login',
-    authPublicKey?: string
+    authPublicKey?: string,
   ): Promise<{ challengeId: string; challenge: string }> {
-    const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/challenge`, {
+    const res = await apiFetch('/auth/challenge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: currentUsername, purpose, authPublicKey })
+      body: JSON.stringify({ username: currentUsername, purpose, authPublicKey }),
     });
     return readJson<{ challengeId: string; challenge: string }>(res);
   }
@@ -32,13 +33,13 @@ export default function Login({ onLogin }: LoginProps) {
   async function publishKey(currentUsername: string, userId: string, token: string) {
     const publicKey = await ensureKeys(currentUsername);
     if (!publicKey) return;
-    await fetch(`${location.protocol}//${location.hostname}:4000/keys/publish`, {
+    await apiFetch('/keys/publish', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ userId, publicKey })
+      body: JSON.stringify({ userId, publicKey }),
     });
   }
 
@@ -51,7 +52,7 @@ export default function Login({ onLogin }: LoginProps) {
       const authPublicKey = await ensureAuthSigningKey(currentUsername);
       const challenge = await requestChallenge(currentUsername, 'register', authPublicKey);
       const signature = await signAuthChallenge(currentUsername, challenge.challenge);
-      const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/register`, {
+      const res = await apiFetch('/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -59,8 +60,8 @@ export default function Login({ onLogin }: LoginProps) {
           password,
           authPublicKey,
           challengeId: challenge.challengeId,
-          signature
-        })
+          signature,
+        }),
       });
       const data = await readJson<User>(res);
       await publishKey(currentUsername, data.id, data.token);
@@ -80,15 +81,15 @@ export default function Login({ onLogin }: LoginProps) {
     try {
       const challenge = await requestChallenge(currentUsername, 'login');
       const signature = await signAuthChallenge(currentUsername, challenge.challenge);
-      const res = await fetch(`${location.protocol}//${location.hostname}:4000/auth/login`, {
+      const res = await apiFetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: currentUsername,
           password,
           challengeId: challenge.challengeId,
-          signature
-        })
+          signature,
+        }),
       });
       const data = await readJson<User>(res);
       await publishKey(currentUsername, data.id, data.token);
@@ -103,15 +104,19 @@ export default function Login({ onLogin }: LoginProps) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-950 px-4">
       <div className="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900/90 p-8 shadow-xl shadow-black/40">
-        <h1 className="text-center text-xl font-semibold tracking-tight text-zinc-100">Cypher Chat</h1>
-        <p className="mt-2 text-center text-sm text-zinc-500">Sign in with your username and password</p>
+        <h1 className="text-center text-xl font-semibold tracking-tight text-zinc-100">
+          Cypher Chat
+        </h1>
+        <p className="mt-2 text-center text-sm text-zinc-500">
+          Sign in with your username and password
+        </p>
 
         <label className="mt-8 block text-xs font-medium uppercase tracking-wider text-zinc-500">
           Username
         </label>
         <input
           value={username}
-          onChange={e => setUsername(e.target.value)}
+          onChange={(e) => setUsername(e.target.value)}
           className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-600 focus:border-zinc-500"
         />
 
@@ -121,8 +126,8 @@ export default function Login({ onLogin }: LoginProps) {
         <input
           type="password"
           value={password}
-          onChange={e => setPassword(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && login()}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && login()}
           className="mt-2 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none ring-0 placeholder:text-zinc-600 focus:border-zinc-500"
           placeholder="At least 12 characters"
           autoComplete="current-password"

@@ -18,11 +18,10 @@ function b642buf(b64: string): Uint8Array<ArrayBuffer> {
 // ---------------------------------------------------------------------------
 
 export async function generateDHKeyPair(): Promise<{ pub: string; priv: string }> {
-  const kp = await crypto.subtle.generateKey(
-    { name: 'ECDH', namedCurve: 'P-256' },
-    true,
-    ['deriveKey', 'deriveBits']
-  );
+  const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+    'deriveKey',
+    'deriveBits',
+  ]);
   const pub = buf2b64(await crypto.subtle.exportKey('raw', kp.publicKey));
   const priv = buf2b64(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
   return { pub, priv };
@@ -30,14 +29,18 @@ export async function generateDHKeyPair(): Promise<{ pub: string; priv: string }
 
 async function dh(myPrivB64: string, theirPubB64: string): Promise<ArrayBuffer> {
   const privateKey = await crypto.subtle.importKey(
-    'pkcs8', b642buf(myPrivB64),
+    'pkcs8',
+    b642buf(myPrivB64),
     { name: 'ECDH', namedCurve: 'P-256' },
-    false, ['deriveBits']
+    false,
+    ['deriveBits'],
   );
   const publicKey = await crypto.subtle.importKey(
-    'raw', b642buf(theirPubB64),
+    'raw',
+    b642buf(theirPubB64),
     { name: 'ECDH', namedCurve: 'P-256' },
-    false, []
+    false,
+    [],
   );
   return crypto.subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256);
 }
@@ -53,13 +56,18 @@ async function dh(myPrivB64: string, theirPubB64: string): Promise<ArrayBuffer> 
  */
 async function kdfRK(
   rootKey: ArrayBuffer,
-  dhOutput: ArrayBuffer
+  dhOutput: ArrayBuffer,
 ): Promise<{ rootKey: ArrayBuffer; chainKey: ArrayBuffer }> {
   const ikm = await crypto.subtle.importKey('raw', dhOutput, 'HKDF', false, ['deriveBits']);
   const derived = await crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(rootKey) as Uint8Array<ArrayBuffer>, info: new TextEncoder().encode('ratchet_rk') },
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(rootKey) as Uint8Array<ArrayBuffer>,
+      info: new TextEncoder().encode('ratchet_rk'),
+    },
     ikm,
-    512
+    512,
   );
   return {
     rootKey: derived.slice(0, 32),
@@ -75,10 +83,14 @@ async function kdfRK(
  * This matches the standard libsignal KDF_CK instantiation.
  */
 async function kdfCK(
-  chainKey: ArrayBuffer
+  chainKey: ArrayBuffer,
 ): Promise<{ chainKey: ArrayBuffer; messageKey: ArrayBuffer }> {
   const hmacKey = await crypto.subtle.importKey(
-    'raw', chainKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    'raw',
+    chainKey,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
   );
   const messageKey = await crypto.subtle.sign('HMAC', hmacKey, new Uint8Array([0x01]));
   const nextChainKey = await crypto.subtle.sign('HMAC', hmacKey, new Uint8Array([0x02]));
@@ -92,14 +104,14 @@ async function kdfCK(
 async function aesEncrypt(
   messageKey: ArrayBuffer,
   plaintext: string,
-  associatedData: Uint8Array<ArrayBuffer>
+  associatedData: Uint8Array<ArrayBuffer>,
 ): Promise<{ iv: string; ct: string }> {
   const key = await crypto.subtle.importKey('raw', messageKey, 'AES-GCM', false, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv, additionalData: associatedData },
     key,
-    new TextEncoder().encode(plaintext)
+    new TextEncoder().encode(plaintext),
   );
   return { iv: buf2b64(iv), ct: buf2b64(ct) };
 }
@@ -108,13 +120,13 @@ async function aesDecrypt(
   messageKey: ArrayBuffer,
   iv: string,
   ct: string,
-  associatedData: Uint8Array<ArrayBuffer>
+  associatedData: Uint8Array<ArrayBuffer>,
 ): Promise<string> {
   const key = await crypto.subtle.importKey('raw', messageKey, 'AES-GCM', false, ['decrypt']);
   const pt = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: b642buf(iv), additionalData: associatedData },
     key,
-    b642buf(ct)
+    b642buf(ct),
   );
   return new TextDecoder().decode(pt);
 }
@@ -137,6 +149,60 @@ export interface RatchetSession {
   pendingSendRatchet?: boolean;
 }
 
+export interface SerializedRatchetSession {
+  version: 1;
+  dhSend: { pub: string; priv: string };
+  dhRecv: string | null;
+  rootKey: string;
+  chainKeySend: string | null;
+  chainKeyRecv: string | null;
+  sendN: number;
+  recvN: number;
+  prevSendN: number;
+  skippedKeys: [string, string][];
+  initialChain?: boolean;
+  pendingSendRatchet?: boolean;
+}
+
+export function serializeRatchetSession(session: RatchetSession): SerializedRatchetSession {
+  return {
+    version: 1,
+    dhSend: session.dhSend,
+    dhRecv: session.dhRecv,
+    rootKey: buf2b64(session.rootKey),
+    chainKeySend: session.chainKeySend ? buf2b64(session.chainKeySend) : null,
+    chainKeyRecv: session.chainKeyRecv ? buf2b64(session.chainKeyRecv) : null,
+    sendN: session.sendN,
+    recvN: session.recvN,
+    prevSendN: session.prevSendN,
+    skippedKeys: [...session.skippedKeys.entries()].map(([key, value]) => [key, buf2b64(value)]),
+    initialChain: session.initialChain,
+    pendingSendRatchet: session.pendingSendRatchet,
+  };
+}
+
+export function deserializeRatchetSession(serialized: SerializedRatchetSession): RatchetSession {
+  if (serialized.version !== 1) {
+    throw new Error(`unsupported ratchet session version: ${serialized.version}`);
+  }
+
+  return {
+    dhSend: serialized.dhSend,
+    dhRecv: serialized.dhRecv,
+    rootKey: b642buf(serialized.rootKey).buffer,
+    chainKeySend: serialized.chainKeySend ? b642buf(serialized.chainKeySend).buffer : null,
+    chainKeyRecv: serialized.chainKeyRecv ? b642buf(serialized.chainKeyRecv).buffer : null,
+    sendN: serialized.sendN,
+    recvN: serialized.recvN,
+    prevSendN: serialized.prevSendN,
+    skippedKeys: new Map(
+      serialized.skippedKeys.map(([key, value]) => [key, b642buf(value).buffer] as const),
+    ),
+    initialChain: serialized.initialChain,
+    pendingSendRatchet: serialized.pendingSendRatchet,
+  };
+}
+
 function skippedKey(dhPub: string, n: number): string {
   return `${dhPub}|${n}`;
 }
@@ -145,63 +211,10 @@ function skippedKey(dhPub: string, n: number): string {
 // Session initialization
 // ---------------------------------------------------------------------------
 
-/**
- * Create a session as the initiator (the party who receives the peer's
- * identity public key first and sends the first message).
- *
- * The shared secret from the identity ECDH becomes the initial root key,
- * and we immediately perform a DH ratchet step with our first ephemeral
- * keypair against the peer's identity key.
- */
-export async function createInitiatorSession(
-  sharedSecret: ArrayBuffer,
-  peerIdentityPub: string
-): Promise<RatchetSession> {
-  const dhSend = await generateDHKeyPair();
-  const dhOutput = await dh(dhSend.priv, peerIdentityPub);
-  const { rootKey, chainKey } = await kdfRK(sharedSecret, dhOutput);
-
-  return {
-    dhSend,
-    dhRecv: peerIdentityPub,
-    rootKey,
-    chainKeySend: chainKey,
-    chainKeyRecv: null,
-    sendN: 0,
-    recvN: 0,
-    prevSendN: 0,
-    skippedKeys: new Map(),
-  };
-}
-
-/**
- * Create a session as the responder (the party who will receive the first
- * message, which contains the initiator's first ephemeral DH public key).
- *
- * The responder uses their identity keypair as their initial "DH ratchet"
- * keypair. The first incoming message will trigger a DH ratchet step.
- */
-export async function createResponderSession(
-  sharedSecret: ArrayBuffer,
-  myIdentityKeyPair: { pub: string; priv: string }
-): Promise<RatchetSession> {
-  return {
-    dhSend: myIdentityKeyPair,
-    dhRecv: null,
-    rootKey: sharedSecret,
-    chainKeySend: null,
-    chainKeyRecv: null,
-    sendN: 0,
-    recvN: 0,
-    prevSendN: 0,
-    skippedKeys: new Map(),
-  };
-}
-
 async function deriveInitialChains(
   sharedSecret: ArrayBuffer,
   myIdentityPub: string,
-  peerIdentityPub: string
+  peerIdentityPub: string,
 ): Promise<{ send: ArrayBuffer; recv: ArrayBuffer }> {
   const [low, high] = [myIdentityPub, peerIdentityPub].sort();
   const hkdfKey = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveBits']);
@@ -213,7 +226,7 @@ async function deriveInitialChains(
       info: new TextEncoder().encode(`initial_chains_v1:${low}:${high}`),
     },
     hkdfKey,
-    512
+    512,
   );
   const lowToHigh = derived.slice(0, 32);
   const highToLow = derived.slice(32, 64);
@@ -225,7 +238,7 @@ async function deriveInitialChains(
 export async function createBidirectionalSession(
   sharedSecret: ArrayBuffer,
   myIdentityKeyPair: { pub: string; priv: string },
-  peerIdentityPub: string
+  peerIdentityPub: string,
 ): Promise<RatchetSession> {
   const chains = await deriveInitialChains(sharedSecret, myIdentityKeyPair.pub, peerIdentityPub);
   return {
@@ -270,7 +283,7 @@ function encodeHeaderAD(header: RatchetHeader): Uint8Array<ArrayBuffer> {
 
 export async function ratchetEncrypt(
   session: RatchetSession,
-  plaintext: string
+  plaintext: string,
 ): Promise<{ ciphertext: string; session: RatchetSession }> {
   let s = session.pendingSendRatchet ? await sendRatchetStep(session) : session;
 
@@ -331,10 +344,7 @@ function parsePayload(raw: string): DoubleRatchetPayload {
   return p as DoubleRatchetPayload;
 }
 
-async function skipMessageKeys(
-  session: RatchetSession,
-  until: number
-): Promise<RatchetSession> {
+async function skipMessageKeys(session: RatchetSession, until: number): Promise<RatchetSession> {
   if (!session.chainKeyRecv) return session;
   if (until - session.recvN > MAX_SKIP) {
     throw new Error('too many skipped messages');
@@ -353,10 +363,7 @@ async function skipMessageKeys(
   return { ...session, chainKeyRecv, recvN, skippedKeys };
 }
 
-async function dhRatchetStep(
-  session: RatchetSession,
-  peerDHPub: string
-): Promise<RatchetSession> {
+async function dhRatchetStep(session: RatchetSession, peerDHPub: string): Promise<RatchetSession> {
   const newDH = await generateDHKeyPair();
 
   // Receiving chain: DH with our old send key and their new key
@@ -401,7 +408,7 @@ async function sendRatchetStep(session: RatchetSession): Promise<RatchetSession>
 
 export async function ratchetDecrypt(
   session: RatchetSession,
-  raw: string
+  raw: string,
 ): Promise<{ plaintext: string; session: RatchetSession }> {
   const msg = parsePayload(raw);
 

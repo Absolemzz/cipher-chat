@@ -1,436 +1,105 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ensureKeys, getPublicKey, getKeyFingerprint, initDoubleRatchet } from '../crypto/crypto'
-import { ratchetEncrypt, ratchetDecrypt, type RatchetSession } from '../crypto/double-ratchet'
-import { v4 as uuidv4 } from 'uuid'
-import type { User, Room, Message, RoomHistoryMessage, WsClientMessage } from '../types'
-
-declare global { interface Window { BACKEND_HOST?: string } }
+import React from 'react';
+import { ChatHeader } from '../components/chat/ChatHeader';
+import { KeyWarningBanner } from '../components/chat/KeyWarningBanner';
+import { MessageComposer } from '../components/chat/MessageComposer';
+import { MessageList } from '../components/chat/MessageList';
+import { PeerVerificationPanel } from '../components/chat/PeerVerificationPanel';
+import { RoomSidebar } from '../components/chat/RoomSidebar';
+import { useLiveRatchetChat } from '../hooks/useLiveRatchetChat';
+import { useMyFingerprint } from '../hooks/useMyFingerprint';
+import { usePeerKeyAudit } from '../hooks/usePeerKeyAudit';
+import { usePeerVerification } from '../hooks/usePeerVerification';
+import { useRoomList } from '../hooks/useRoomList';
+import type { Room, User } from '../types';
 
 interface ChatRoomProps {
   user: User;
   room: Room;
+  onLogout: () => void;
 }
 
-export default function ChatRoom({ user, room }: ChatRoomProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [text, setText] = useState('');
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [selectedRoom, setSelectedRoom] = useState<Room | null>(room);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [myFingerprint, setMyFingerprint] = useState<string | null>(null);
-  const [recipientPublicKey, setRecipientPublicKey] = useState<string | null>(null);
-  const [sessionReady, setSessionReady] = useState(false);
-  const [keyWarning, setKeyWarning] = useState<string | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const ratchetSessionRef = useRef<RatchetSession | null>(null);
-  const historyLoadedRef = useRef(false);
-  const sessionReadyRef = useRef(false);
-  const pendingCiphertextRef = useRef<Extract<WsClientMessage, { type: 'ciphertext' }>[]>([]);
-
-  useEffect(() => {
-    sessionReadyRef.current = sessionReady;
-  }, [sessionReady]);
-
-  useEffect(() => {
-    const pub = getPublicKey(user.username);
-    if (pub) getKeyFingerprint(pub).then(setMyFingerprint);
-  }, [user.username]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!recipientPublicKey) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const session = await initDoubleRatchet(user.username, recipientPublicKey);
-        if (cancelled) return;
-        ratchetSessionRef.current = session;
-        setSessionReady(true);
-      } catch (e) {
-        console.warn('[ChatRoom] initDoubleRatchet failed', e);
-      }
-    })();
-    return () => { cancelled = true };
-  }, [recipientPublicKey, user.username]);
-
-  const decryptCiphertextMsg = useCallback(async (msg: Extract<WsClientMessage, { type: 'ciphertext' }>) => {
-    const session = ratchetSessionRef.current;
-    if (!session) throw new Error('[ChatRoom] decrypt: ratchet session not ready');
-    const { plaintext, session: updated } = await ratchetDecrypt(session, msg.ciphertext);
-    ratchetSessionRef.current = updated;
-    setMessages(prev => [...prev, {
-      id: msg.id,
-      text: plaintext,
-      from: msg.from,
-      ts: msg.timestamp
-    }]);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedRoom || !sessionReady || !ratchetSessionRef.current) return;
-
-    let cancelled = false;
-    historyLoadedRef.current = false;
-
-    (async () => {
-      try {
-        const res = await fetch(`${location.protocol}//${location.hostname}:4000/rooms/${selectedRoom.id}/messages`, {
-          headers: { 'Authorization': `Bearer ${user.token}` }
-        });
-        const history = await res.json() as RoomHistoryMessage[];
-        const sorted = [...history].sort((a, b) => a.timestamp - b.timestamp);
-        const decryptedHistory: Message[] = [];
-        for (const msg of sorted) {
-          if (cancelled) return;
-          try {
-            const parsed = JSON.parse(msg.ciphertext) as { mode?: string };
-            if (parsed.mode !== 'double-ratchet') {
-              decryptedHistory.push({ id: msg.id, text: '[legacy encrypted message]', from: msg.sender_id, ts: msg.timestamp });
-              continue;
-            }
-            const { plaintext, session: updated } = await ratchetDecrypt(ratchetSessionRef.current!, msg.ciphertext);
-            ratchetSessionRef.current = updated;
-            decryptedHistory.push({ id: msg.id, text: plaintext, from: msg.sender_id, ts: msg.timestamp });
-          } catch {
-            decryptedHistory.push({ id: msg.id, text: '[undecryptable message]', from: msg.sender_id, ts: msg.timestamp });
-          }
-        }
-        if (cancelled) return;
-        setMessages(decryptedHistory);
-      } catch (e) {
-        console.warn('failed to load message history', e);
-        if (!cancelled) setMessages([]);
-      } finally {
-        if (cancelled) return;
-        historyLoadedRef.current = true;
-        const pending = pendingCiphertextRef.current;
-        pendingCiphertextRef.current = [];
-        for (const p of pending) {
-          try {
-            await decryptCiphertextMsg(p);
-          } catch (e) {
-            console.warn('decrypt failed', e);
-          }
-        }
-      }
-    })();
-
-    return () => { cancelled = true };
-  }, [selectedRoom?.id, sessionReady, user.token, decryptCiphertextMsg]);
-
-  useEffect(() => {
-    async function fetchRooms() {
-      try {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        const res = await fetch(`${location.protocol}//${location.hostname}:4000/users/${user.id}/rooms`, {
-          headers: { 'Authorization': `Bearer ${user.token}` }
-        });
-        const data = await res.json();
-        setRooms(data);
-      } catch (e) {
-        console.warn('failed to fetch rooms', e);
-      }
-    }
-    fetchRooms();
-  }, [selectedRoom?.id]);
-
-  useEffect(() => {
-    if (!selectedRoom) return;
-    ensureKeys(user.username).catch(() => {});
-    setRecipientPublicKey(null);
-    setSessionReady(false);
-    setKeyWarning(null);
-    setMessages([]);
-    ratchetSessionRef.current = null;
-    historyLoadedRef.current = false;
-    pendingCiphertextRef.current = [];
-
-    const host = window.BACKEND_HOST || location.hostname;
-    const socket = new WebSocket(`ws://${host}:4000`);
-    wsRef.current = socket;
-
-    socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'auth', token: user.token }));
-    });
-
-    socket.addEventListener('message', async (ev) => {
-      const msg = JSON.parse(ev.data) as WsClientMessage;
-
-      if (msg.type === 'auth_ok') {
-        socket.send(JSON.stringify({ type: 'join', roomId: selectedRoom.id }));
-        await ensureKeys(user.username);
-        const myPub = getPublicKey(user.username);
-        if (myPub) {
-          socket.send(JSON.stringify({
-            type: 'public_key',
-            userId: user.id,
-            publicKey: myPub,
-            roomId: selectedRoom.id
-          }));
-        }
-        return;
-      }
-
-      if (msg.type === 'public_key') {
-        if (msg.userId === user.id) return;
-        if (msg.roomId !== selectedRoom.id) return;
-        setRecipientPublicKey(msg.publicKey);
-
-        auditPeerKey(msg.userId, msg.publicKey);
-        return;
-      }
-
-      if (msg.type === 'ciphertext') {
-        if (!sessionReadyRef.current || !ratchetSessionRef.current || !historyLoadedRef.current) {
-          pendingCiphertextRef.current.push(msg);
-          return;
-        }
-        try {
-          await decryptCiphertextMsg(msg);
-        } catch (e) {
-          console.warn('decrypt failed', e);
-        }
-      }
-
-      if (msg.type === 'delivered') {
-        setMessages(prev => prev.map(m =>
-          m.id === msg.id ? { ...m, status: 'delivered' } : m
-        ));
-      }
-    });
-
-    return () => {
-      try { socket.close(); } catch (e) {}
-    }
-  }, [selectedRoom?.id, user.token, user.id, decryptCiphertextMsg]);
-
-  async function send() {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      alert('socket not ready');
-      return;
-    }
-    if (!text.trim()) return;
-    if (!recipientPublicKey || !ratchetSessionRef.current || !sessionReady) {
-      console.error('[ChatRoom] E2E session not established');
-      return;
-    }
-
-    const id = uuidv4();
-    let ciphertext: string;
-    try {
-      const encrypted = await ratchetEncrypt(ratchetSessionRef.current, text);
-      ciphertext = encrypted.ciphertext;
-      ratchetSessionRef.current = encrypted.session;
-    } catch (e) {
-      console.error('[ChatRoom] encrypt failed', e);
-      return;
-    }
-
-    const payload = {
-      type: 'ciphertext',
-      id,
-      roomId: selectedRoom!.id,
-      ciphertext,
-      timestamp: Date.now()
-    };
-
-    setMessages(prev => [...prev, {
-      id,
-      text,
-      from: user.id,
-      ts: Date.now(),
-      status: 'pending'
-    }]);
-    wsRef.current.send(JSON.stringify(payload));
-    setText('');
-  }
-
-  async function handleLeaveRoom(roomToLeave: Room) {
-    try {
-      await fetch(`${location.protocol}//${location.hostname}:4000/users/${user.id}/rooms/${roomToLeave.id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${user.token}` }
-      });
-    } catch (e) {
-      console.warn('failed to leave room on server', e);
-    }
-
-    const updatedRooms = rooms.filter(r => r.id !== roomToLeave.id);
-    setRooms(updatedRooms);
-
-    if (selectedRoom?.id === roomToLeave.id) {
-      setSelectedRoom(updatedRooms.length > 0 ? updatedRooms[0] : null);
-    }
-  }
-
-  const filteredRooms = rooms.filter(r =>
-    r.code.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  async function auditPeerKey(peerId: string, currentKey: string) {
-    try {
-      const res = await fetch(`${location.protocol}//${location.hostname}:4000/keys/${peerId}/log`, {
-        headers: { 'Authorization': `Bearer ${user.token}` },
-      });
-      if (!res.ok) return;
-      const data = await res.json() as { entries: { public_key: string; published_at: number }[] };
-      if (data.entries.length <= 1) {
-        setKeyWarning(null);
-        return;
-      }
-
-      const lastKnownKey = localStorage.getItem(`peer_key_${peerId}`);
-      if (lastKnownKey && lastKnownKey !== currentKey) {
-        setKeyWarning(
-          `Peer's identity key has changed (${data.entries.length} keys on record). ` +
-          'Verify their fingerprint out-of-band to rule out a MITM attack.'
-        );
-      } else {
-        setKeyWarning(null);
-      }
-      localStorage.setItem(`peer_key_${peerId}`, currentKey);
-    } catch {
-      // network failure — don't block chat
-    }
-  }
-
-  const canSendE2E = Boolean(recipientPublicKey && sessionReady);
+export default function ChatRoom({ user, room, onLogout }: ChatRoomProps) {
+  const myFingerprint = useMyFingerprint(user.username);
+  const {
+    filteredRooms,
+    leaveRoom,
+    searchTerm,
+    selectedRoom,
+    selectedRoomId,
+    setSearchTerm,
+    setSelectedRoom,
+  } = useRoomList(user, room);
+  const { auditPeerKey, keyWarning, setKeyWarning } = usePeerKeyAudit(user);
+  const {
+    canSendE2E,
+    connectionState,
+    messages,
+    messagesEndRef,
+    peerIdentity,
+    retryMessage,
+    send,
+    setText,
+    text,
+  } = useLiveRatchetChat({
+    auditPeerKey,
+    selectedRoomId,
+    setKeyWarning,
+    user,
+  });
+  const peerVerification = usePeerVerification({
+    peerIdentity,
+    roomId: selectedRoomId,
+    user,
+  });
 
   return (
     <div className="min-h-screen bg-zinc-950">
       <div className="flex h-screen min-h-0">
-        <aside className="flex w-[260px] flex-shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/95">
-          <div className="flex h-[120px] flex-shrink-0 flex-col justify-center border-b border-zinc-800 px-4">
-            <h1 className="text-base font-semibold tracking-tight text-zinc-100">Cypher Chat</h1>
-            <input
-              className="mt-3 w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-600"
-              placeholder="Search conversations..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {filteredRooms.map(r => (
-              <div
-                key={r.id}
-                className={`group relative cursor-pointer border-b border-zinc-800/80 p-3 hover:bg-zinc-800/60 ${
-                  selectedRoom?.id === r.id ? 'bg-zinc-800/80' : ''
-                }`}
-                onClick={() => setSelectedRoom(r)}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-zinc-200">
-                      <span className="text-zinc-500">Room </span>
-                      <span className="font-mono text-zinc-100">{r.code}</span>
-                    </div>
-                    <div className="mt-0.5 text-xs text-zinc-500">
-                      {r.joined_at ? new Date(r.joined_at).toLocaleDateString() : ''}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="flex-shrink-0 text-lg text-zinc-500 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`Are you sure you want to leave Room: ${r.code}?`)) {
-                        handleLeaveRoom(r);
-                      }
-                    }}
-                  >×</button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {myFingerprint && (
-            <div className="flex-shrink-0 border-t border-zinc-800 p-3">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">Your key fingerprint</div>
-              <div className="mt-1.5 break-all font-mono text-xs leading-relaxed text-zinc-400">{myFingerprint}</div>
-            </div>
-          )}
-        </aside>
+        <RoomSidebar
+          myFingerprint={myFingerprint}
+          onLeaveRoom={leaveRoom}
+          onSearchTermChange={setSearchTerm}
+          onSelectRoom={setSelectedRoom}
+          rooms={filteredRooms}
+          searchTerm={searchTerm}
+          selectedRoomId={selectedRoomId}
+        />
 
         <div className="flex min-w-0 min-h-0 flex-1 flex-col bg-zinc-950">
           {selectedRoom ? (
             <>
-              <div className="flex h-[120px] flex-shrink-0 flex-col justify-center border-b border-zinc-800 bg-zinc-950 px-5">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="text-sm font-medium text-zinc-400">
-                      Room <span className="font-mono text-base text-zinc-100">{selectedRoom.code}</span>
-                    </h3>
-                    <div className="mt-2 flex items-center gap-1.5">
-                      <span className="text-xs text-emerald-500/90">🔒</span>
-                      <span className="text-xs text-emerald-500/90">
-                        {canSendE2E ? 'End-to-end encrypted' : 'Establishing session…'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <ChatHeader
+                canSendE2E={canSendE2E}
+                onLogout={onLogout}
+                room={selectedRoom}
+                verificationPanel={
+                  <PeerVerificationPanel
+                    onMarkVerified={peerVerification.markVerified}
+                    onResetVerification={peerVerification.resetVerification}
+                    safetyNumber={peerVerification.safetyNumber}
+                    status={peerVerification.status}
+                  />
+                }
+              />
 
               {keyWarning && (
-                <div className="flex items-start gap-2.5 border-b border-amber-800/40 bg-amber-950/60 px-5 py-3">
-                  <span className="mt-0.5 flex-shrink-0 text-sm text-amber-400">&#9888;</span>
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-amber-300">Identity key changed</p>
-                    <p className="mt-0.5 text-xs text-amber-400/80">{keyWarning}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setKeyWarning(null)}
-                    className="ml-auto flex-shrink-0 text-xs text-amber-500 hover:text-amber-300"
-                  >dismiss</button>
-                </div>
+                <KeyWarningBanner keyWarning={keyWarning} onDismiss={() => setKeyWarning(null)} />
               )}
 
-              <div className="min-h-0 flex-1 overflow-y-auto bg-zinc-950 p-4">
-                {messages.map(m => {
-                  const isMe = m.from === user.id;
-                  return (
-                    <div key={m.id} className={`mb-3 flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-sm rounded-lg px-3 py-2 ${
-                        isMe
-                          ? 'border border-zinc-700 bg-zinc-800 text-zinc-100'
-                          : 'border border-zinc-800/80 bg-zinc-900 text-zinc-200'
-                      }`}>
-                        <div className="text-sm">{m.text}</div>
-                        <div className="mt-1 text-xs text-zinc-500">
-                          {new Date(m.ts).toLocaleTimeString()} {m.status && `• ${m.status}`}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div ref={messagesEndRef} />
-              </div>
+              <MessageList
+                messages={messages}
+                messagesEndRef={messagesEndRef}
+                onRetryMessage={retryMessage}
+                userId={user.id}
+              />
 
-              <div className="flex-shrink-0 border-t border-zinc-800 bg-zinc-950 p-4">
-                <div className="flex gap-2">
-                  <input
-                    className="min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
-                    placeholder={canSendE2E ? 'Type a message…' : 'Waiting for peer and session…'}
-                    value={text}
-                    disabled={!canSendE2E}
-                    onChange={e => setText(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && canSendE2E && send()}
-                  />
-                  <button
-                    type="button"
-                    onClick={send}
-                    disabled={!canSendE2E}
-                    className="flex-shrink-0 rounded-lg border border-zinc-700 bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
+              <MessageComposer
+                canSendE2E={canSendE2E}
+                connectionState={connectionState}
+                onSend={send}
+                onTextChange={setText}
+                text={text}
+              />
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
@@ -440,5 +109,5 @@ export default function ChatRoom({ user, room }: ChatRoomProps) {
         </div>
       </div>
     </div>
-  )
+  );
 }

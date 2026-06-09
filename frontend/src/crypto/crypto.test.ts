@@ -7,11 +7,10 @@ function buf2b64(buf: ArrayBuffer | Uint8Array): string {
 }
 
 async function generateKeyPair() {
-  const kp = await crypto.subtle.generateKey(
-    { name: 'ECDH', namedCurve: 'P-256' },
-    true,
-    ['deriveKey', 'deriveBits']
-  );
+  const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+    'deriveKey',
+    'deriveBits',
+  ]);
   const pub = buf2b64(await crypto.subtle.exportKey('raw', kp.publicKey));
   const priv = buf2b64(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
   return { pub, priv };
